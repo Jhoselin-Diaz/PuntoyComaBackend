@@ -13,11 +13,21 @@ public class ProductoDTO {
     private Long id;
     private String nombre;
     private String descripcion;
-    private Double precio;
+    private String descripcionCorta; // Alias for descripcion
+    private Double precio; // Active price (offer price if discount is active)
+    private Double precioOferta; // Alias for active price
+    private Double precioOriginal; // Alias for precioAnterior (before discount)
     private Integer stock;
+    private Integer stockInicial; // Alias for stock
     private String categoria;
     private String imageUrl;
     private Boolean activo;
+    private Boolean visible;
+    private Boolean esVisible;
+    private Boolean destacado;
+    private Boolean esDestacado;
+    private Boolean nuevo;
+    private Boolean esNuevo;
 
     // Technical sheet / extended specifications fields
     private String subtitulo;
@@ -36,7 +46,7 @@ public class ProductoDTO {
 
     // Fields for the 4 tabs of "Agregar nuevo producto"
     private String imagenPrincipal;
-    private String miniaturasAdicionales;
+    private List<String> miniaturasAdicionales;
     private String descripcionDetallada;
     private String caracteristicasDestacadas;
 

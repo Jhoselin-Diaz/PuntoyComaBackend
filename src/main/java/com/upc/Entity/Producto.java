@@ -31,6 +31,9 @@ public class Producto {
     private String imageUrl;
 
     private Boolean activo;
+    private Boolean visible;
+    private Boolean destacado;
+    private Boolean nuevo;
 
     // Technical sheet / extended specifications fields
     private String subtitulo;
