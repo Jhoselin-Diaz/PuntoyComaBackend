@@ -67,4 +67,13 @@ public class ConfiguracionNegocio {
 
     @Column(name = "banner_visible")
     private Boolean bannerVisible;
+
+    @Column(name = "ofertas_banner_titulo")
+    private String ofertasBannerTitulo;
+
+    @Column(name = "ofertas_banner_subtitulo", columnDefinition = "TEXT")
+    private String ofertasBannerSubtitulo;
+
+    @Column(name = "ofertas_banner_img")
+    private String ofertasBannerImg;
 }

@@ -50,6 +50,57 @@ public class ProductoDTO {
     private String descripcionDetallada;
     private String caracteristicasDestacadas;
 
+    @com.fasterxml.jackson.annotation.JsonProperty("material_intro")
+    private String materialIntro;
+
+    @com.fasterxml.jackson.annotation.JsonProperty("material_cuidados")
+    private String materialCuidados;
+
+    @com.fasterxml.jackson.annotation.JsonProperty("envios_info")
+    private String enviosInfo;
+
+    @com.fasterxml.jackson.annotation.JsonProperty("devoluciones_info")
+    private String devolucionesInfo;
+
+    @com.fasterxml.jackson.annotation.JsonProperty("material_caracteristicas")
+    private String materialCaracteristicas;
+
+    @com.fasterxml.jackson.annotation.JsonProperty("apto_microondas")
+    private Boolean aptoMicroondas;
+
+    @com.fasterxml.jackson.annotation.JsonProperty("apto_lavavajillas")
+    private Boolean aptoLavavajillas;
+
+    @com.fasterxml.jackson.annotation.JsonProperty("resiste_choque_termico")
+    private Boolean resisteChoqueTermico;
+
+    @com.fasterxml.jackson.annotation.JsonProperty("limpieza_suave")
+    private Boolean limpiezaSuave;
+
+    @com.fasterxml.jackson.annotation.JsonProperty("prohibido_fuego_directo")
+    private Boolean prohibidoFuegoDirecto;
+
+    @com.fasterxml.jackson.annotation.JsonProperty("apto_temperaturas")
+    private Boolean aptoTemperaturas;
+
+    @com.fasterxml.jackson.annotation.JsonProperty("grado_alimentario")
+    private Boolean gradoAlimentario;
+
+    @com.fasterxml.jackson.annotation.JsonProperty("evitar_abrasivos")
+    private Boolean evitarAbrasivos;
+
+    @com.fasterxml.jackson.annotation.JsonProperty("control_humedad")
+    private Boolean controlHumedad;
+
+    @com.fasterxml.jackson.annotation.JsonProperty("lavado_mano")
+    private Boolean lavadoMano;
+
+    @com.fasterxml.jackson.annotation.JsonProperty("vistas_contador")
+    private Integer vistasContador = 0;
+
+    private java.time.LocalDate fechaInicioOferta;
+    private java.time.LocalDate fechaFinOferta;
+
     // List of suggested/related product IDs
     private List<Long> sugeridosIds;
 }
