@@ -17,33 +17,23 @@ public class Chat {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    // e.g., 'NORMAL', 'EN_REVISION' for priority alerts
-    private String estado;
+    @Column(name = "telefono_cliente", unique = true, nullable = false)
+    private String telefonoCliente;
 
-    @Column(name = "fecha_creacion")
-    private LocalDateTime fechaCreacion;
+    @Column(name = "nombre_cliente")
+    private String nombreCliente;
+
+    @Column(name = "ultimo_mensaje", columnDefinition = "TEXT")
+    private String ultimoMensaje;
+
+    @Column(name = "fecha_ultima_actualizacion")
+    private LocalDateTime fechaUltimaActualizacion;
+
+    @Column(name = "unread_count")
+    private Integer unreadCount;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "usuario_id", nullable = false)
     private Usuario usuario;
-
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "pedido_id", nullable = true)
-    private Pedido pedido;
-
-    // AI assistant status fields
-    @Column(name = "pedido_identificado")
-    private Boolean pedidoIdentificado;
-
-    @Column(name = "direccion_detectada")
-    private Boolean direccionDetectada;
-
-    @Column(name = "datos_completos")
-    private Boolean datosCompletos;
-
-    @Column(name = "contexto_analizado")
-    private Boolean contextoAnalizado;
-
-    @Column(name = "mensaje_generado", columnDefinition = "TEXT")
-    private String mensajeGenerado;
 }
+
