@@ -18,6 +18,7 @@ public class ShopVideo {
     private Long id;
 
     private String titulo;
+    private String descripcion;
     private String plataforma;
 
     @Column(name = "video_url")

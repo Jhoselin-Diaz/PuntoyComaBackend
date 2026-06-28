@@ -5,6 +5,7 @@ import com.upc.Entity.InventarioMovimiento;
 import com.upc.Repository.ProductoRepository;
 import com.upc.Repository.InventarioMovimientoRepository;
 import com.upc.DTO.ProductoDTO;
+import com.upc.DTO.MovimientoInventarioDTO;
 import org.modelmapper.ModelMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -131,19 +132,36 @@ public class ProductoServiceImpl implements ProductoService {
 
     @Override
     @Transactional
-    public ProductoDTO agregarStockProducto(Long id, Integer cantidad, String proveedor, String notas) {
+    public ProductoDTO agregarStockProducto(Long id, Integer cantidad, String proveedor, String notas, String tipoMovimiento) {
         Producto producto = productoRepository.findById(id)
             .orElseThrow(() -> new RuntimeException("Producto no encontrado con el ID: " + id));
 
+        Integer cantidadFinal = cantidad;
+        if ("AJUSTE".equalsIgnoreCase(tipoMovimiento)) {
+            if (cantidadFinal != null) {
+                cantidadFinal = -Math.abs(cantidadFinal);
+            }
+        }
+
         // Update stock
-        int nuevoStock = (producto.getStock() != null ? producto.getStock() : 0) + cantidad;
+        int nuevoStock = (producto.getStock() != null ? producto.getStock() : 0) + (cantidadFinal != null ? cantidadFinal : 0);
         producto.setStock(nuevoStock);
         Producto productoActualizado = productoRepository.save(producto);
 
         // Create historical movement record
         InventarioMovimiento movimiento = new InventarioMovimiento();
-        movimiento.setCantidad(cantidad);
-        movimiento.setTipoMovimiento("INGRESO");
+        movimiento.setCantidad(cantidadFinal);
+        if ("AJUSTE".equalsIgnoreCase(tipoMovimiento)) {
+            movimiento.setTipoMovimiento("AJUSTE");
+        } else if ("ENTRADA".equalsIgnoreCase(tipoMovimiento)) {
+            movimiento.setTipoMovimiento("ENTRADA");
+        } else if ("SALIDA".equalsIgnoreCase(tipoMovimiento)) {
+            movimiento.setTipoMovimiento("SALIDA");
+        } else if (cantidadFinal != null && cantidadFinal < 0) {
+            movimiento.setTipoMovimiento("SALIDA");
+        } else {
+            movimiento.setTipoMovimiento("ENTRADA");
+        }
         movimiento.setProveedor(proveedor);
         movimiento.setFecha(LocalDateTime.now());
         movimiento.setNotas(notas);
@@ -168,10 +186,24 @@ public class ProductoServiceImpl implements ProductoService {
     }
 
     @Override
+    @Transactional
     public ProductoDTO obtenerPorId(Long id) {
         Producto producto = productoRepository.findById(id)
             .orElseThrow(() -> new RuntimeException("Producto no encontrado con el ID: " + id));
-        return convertToDto(producto);
+        
+        Integer vistas = producto.getVistasContador();
+        producto.setVistasContador(vistas == null ? 1 : vistas + 1);
+        Producto guardado = productoRepository.save(producto);
+        
+        return convertToDto(guardado);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<ProductoDTO> obtenerMasVistos() {
+        return productoRepository.findAllOrderByVistasContadorDesc().stream()
+            .map(this::convertToDto)
+            .collect(Collectors.toList());
     }
 
     @org.springframework.beans.factory.annotation.Value("${supabase.url}")
@@ -248,8 +280,8 @@ public class ProductoServiceImpl implements ProductoService {
         dto.setActivo(producto.getActivo());
         dto.setEsDestacado(producto.getDestacado());
         dto.setDestacado(producto.getDestacado());
-        dto.setEsNuevo(producto.getNuevo());
         dto.setNuevo(producto.getNuevo());
+        dto.setVistasContador(producto.getVistasContador() != null ? producto.getVistasContador() : 0);
         
         // Map both gallery variables to the same list for frontend ease of use
         if (producto.getGaleriaUrls() != null) {
@@ -299,5 +331,47 @@ public class ProductoServiceImpl implements ProductoService {
         productoRepository.save(producto);
 
         productoRepository.delete(producto);
+    }
+
+    @Override
+    @Transactional
+    public ProductoDTO actualizarVisibilidad(Long id, Boolean visible) {
+        Producto producto = productoRepository.findById(id)
+            .orElseThrow(() -> new RuntimeException("Producto no encontrado con el ID: " + id));
+        producto.setVisible(visible);
+        producto.setActivo(visible);
+        Producto guardado = productoRepository.save(producto);
+        return convertToDto(guardado);
+    }
+
+    @Override
+    @Transactional
+    public ProductoDTO actualizarProducto(Long id, ProductoDTO productoDTO) {
+        if (!productoRepository.existsById(id)) {
+            throw new RuntimeException("Producto no encontrado con el ID: " + id);
+        }
+        productoDTO.setId(id);
+        return crearProducto(productoDTO);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<MovimientoInventarioDTO> obtenerMovimientos() {
+        return inventarioMovimientoRepository.findAll().stream()
+            .map(m -> {
+                MovimientoInventarioDTO dto = new MovimientoInventarioDTO();
+                dto.setId(m.getId());
+                dto.setCantidad(m.getCantidad());
+                dto.setTipoMovimiento(m.getTipoMovimiento());
+                dto.setProveedor(m.getProveedor());
+                dto.setFecha(m.getFecha());
+                dto.setNotas(m.getNotas());
+                if (m.getProducto() != null) {
+                    dto.setProductoId(m.getProducto().getId());
+                    dto.setProductoNombre(m.getProducto().getNombre());
+                }
+                return dto;
+            })
+            .collect(Collectors.toList());
     }
 }

@@ -77,6 +77,60 @@ public class Producto {
     @Column(name = "caracteristicas_destacadas", columnDefinition = "TEXT")
     private String caracteristicasDestacadas;
 
+    @Column(name = "material_intro", columnDefinition = "TEXT")
+    private String materialIntro;
+
+    @Column(name = "material_cuidados", columnDefinition = "TEXT")
+    private String materialCuidados;
+
+    @Column(name = "envios_info", columnDefinition = "TEXT")
+    private String enviosInfo;
+
+    @Column(name = "devoluciones_info", columnDefinition = "TEXT")
+    private String devolucionesInfo;
+
+    @Column(name = "material_caracteristicas", columnDefinition = "TEXT")
+    private String materialCaracteristicas;
+
+    @Column(name = "apto_microondas")
+    private Boolean aptoMicroondas;
+
+    @Column(name = "apto_lavavajillas")
+    private Boolean aptoLavavajillas;
+
+    @Column(name = "resiste_choque_termico")
+    private Boolean resisteChoqueTermico;
+
+    @Column(name = "limpieza_suave")
+    private Boolean limpiezaSuave;
+
+    @Column(name = "prohibido_fuego_directo")
+    private Boolean prohibidoFuegoDirecto;
+
+    @Column(name = "apto_temperaturas")
+    private Boolean aptoTemperaturas;
+
+    @Column(name = "grado_alimentario")
+    private Boolean gradoAlimentario;
+
+    @Column(name = "evitar_abrasivos")
+    private Boolean evitarAbrasivos;
+
+    @Column(name = "control_humedad")
+    private Boolean controlHumedad;
+
+    @Column(name = "lavado_mano")
+    private Boolean lavadoMano;
+
+    @Column(name = "vistas_contador")
+    private Integer vistasContador = 0;
+
+    @Column(name = "fecha_inicio_oferta")
+    private java.time.LocalDate fechaInicioOferta;
+
+    @Column(name = "fecha_fin_oferta")
+    private java.time.LocalDate fechaFinOferta;
+
     // Self-referencing ManyToMany relationship for recommended/related products
     @ManyToMany(fetch = FetchType.LAZY)
     @JoinTable(

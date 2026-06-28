@@ -1,6 +1,7 @@
 package com.upc.Controller;
 
 import com.upc.DTO.ProductoDTO;
+import com.upc.DTO.MovimientoInventarioDTO;
 import com.upc.Service.ProductoService;
 import lombok.Data;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -47,7 +48,8 @@ public class ProductoController {
                 id,
                 stockRequest.getCantidad(),
                 stockRequest.getProveedor(),
-                stockRequest.getNotas()
+                stockRequest.getNotas(),
+                stockRequest.getTipoMovimiento()
         );
         return new ResponseEntity<>(actualizado, HttpStatus.OK);
     }
@@ -57,9 +59,19 @@ public class ProductoController {
         return new ResponseEntity<>(productoService.obtenerTodos(), HttpStatus.OK);
     }
 
+    @GetMapping("/movimientos")
+    public ResponseEntity<List<MovimientoInventarioDTO>> obtenerMovimientos() {
+        return new ResponseEntity<>(productoService.obtenerMovimientos(), HttpStatus.OK);
+    }
+
     @GetMapping("/publicos")
     public ResponseEntity<List<ProductoDTO>> obtenerPublicos() {
         return new ResponseEntity<>(productoService.obtenerPublicos(), HttpStatus.OK);
+    }
+
+    @GetMapping("/mas-vistos")
+    public ResponseEntity<List<ProductoDTO>> obtenerMasVistos() {
+        return new ResponseEntity<>(productoService.obtenerMasVistos(), HttpStatus.OK);
     }
 
     @GetMapping("/{id}")
@@ -73,10 +85,29 @@ public class ProductoController {
         return new ResponseEntity<>(HttpStatus.NO_CONTENT);
     }
 
+    @CrossOrigin(origins = "http://localhost:4200")
+    @PatchMapping("/{id}/visibilidad")
+    public ResponseEntity<ProductoDTO> actualizarVisibilidad(
+            @PathVariable Long id,
+            @RequestParam Boolean visible) {
+        ProductoDTO actualizado = productoService.actualizarVisibilidad(id, visible);
+        return new ResponseEntity<>(actualizado, HttpStatus.OK);
+    }
+
+    @CrossOrigin(origins = "http://localhost:4200")
+    @PutMapping("/{id}")
+    public ResponseEntity<ProductoDTO> actualizarProducto(
+            @PathVariable Long id,
+            @RequestBody ProductoDTO productoDTO) {
+        ProductoDTO actualizado = productoService.actualizarProducto(id, productoDTO);
+        return new ResponseEntity<>(actualizado, HttpStatus.OK);
+    }
+
     @Data
     public static class StockRequest {
         private Integer cantidad;
         private String proveedor;
         private String notas;
+        private String tipoMovimiento;
     }
 }
