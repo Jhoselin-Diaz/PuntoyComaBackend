@@ -17,20 +17,19 @@ public class Mensaje {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(columnDefinition = "TEXT")
-    private String contenido;
-
-    private String remitente;
-
-    @Column(name = "fecha_envio")
-    private LocalDateTime fechaEnvio;
-
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "chat_id", nullable = false)
     private Chat chat;
 
-    @Column(name = "is_voucher")
-    private Boolean isVoucher;
+    @Column(name = "contenido", columnDefinition = "TEXT")
+    private String contenido;
 
-    private Boolean leido;
+    private String remitente; // "CLIENTE" o "ADMINISTRADOR"
+
+    @Column(name = "fecha_envio")
+    private LocalDateTime fechaEnvio;
+
+    @Column(name = "wamid")
+    private String wamid;
 }
+
