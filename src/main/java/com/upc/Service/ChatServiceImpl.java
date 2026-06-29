@@ -83,48 +83,80 @@ public class ChatServiceImpl implements ChatService {
 
     @Override
     @Transactional
-    public void registrarMensajeCliente(String telefono, String nombreCliente, String contenido, String wamid) {
-        Chat chat = chatRepository.findByTelefonoCliente(telefono)
-                .orElseGet(() -> {
-                    Chat nuevoChat = new Chat();
-                    nuevoChat.setTelefonoCliente(telefono);
-                    nuevoChat.setNombreCliente((nombreCliente != null && !nombreCliente.trim().isEmpty()) ? nombreCliente : "Cliente Nuevo");
-                    nuevoChat.setUnreadCount(0);
+    public void registrarMensaje(String telefono, String lid, String nombreCliente, String contenido, String wamid, String remitente) {
+        // 1. Intentar buscar por teléfono real
+        Chat chat = chatRepository.findByTelefonoCliente(telefono).orElse(null);
 
-                    // Buscar o crear usuario administrador por defecto
-                    Usuario admin = usuarioRepository.findById(1L)
-                            .orElseGet(() -> {
-                                List<Usuario> todos = usuarioRepository.findAll();
-                                if (!todos.isEmpty()) {
-                                    return todos.get(0);
-                                }
-                                Usuario mockAdmin = new Usuario();
-                                mockAdmin.setNombre("Admin Principal");
-                                mockAdmin.setEmail("admin@puntoycoma.com");
-                                mockAdmin.setPassword("password");
-                                mockAdmin.setRol("ADMIN");
-                                mockAdmin.setActivo(true);
-                                mockAdmin.setHabilitado(true);
-                                return usuarioRepository.save(mockAdmin);
-                            });
-                    nuevoChat.setUsuario(admin);
-                    return nuevoChat;
-                });
+        // 2. Si no lo encuentra por teléfono, pero nos pasaron un LID, buscar por LID
+        if (chat == null && lid != null && !lid.trim().isEmpty() && !lid.equals(telefono)) {
+            chat = chatRepository.findByTelefonoCliente(lid).orElse(null);
+            if (chat != null) {
+                // ¡MIGRACIÓN AUTOMÁTICA! Encontramos el chat guardado con el LID antiguo.
+                // Lo actualizamos al teléfono real para unificarlo e impedir duplicados futuros.
+                System.out.println("[WhatsApp] Migrando chat antiguo de LID " + lid + " a número real " + telefono);
+                chat.setTelefonoCliente(telefono);
+                chat = chatRepository.save(chat);
+            }
+        }
+
+        // 3. Si sigue siendo nulo, crear uno nuevo
+        if (chat == null) {
+            Chat nuevoChat = new Chat();
+            nuevoChat.setTelefonoCliente(telefono);
+            nuevoChat.setNombreCliente((nombreCliente != null && !nombreCliente.trim().isEmpty()) ? nombreCliente : "Cliente Nuevo");
+            nuevoChat.setUnreadCount(0);
+
+            // Buscar o crear usuario administrador por defecto
+            Usuario admin = usuarioRepository.findById(1L)
+                    .orElseGet(() -> {
+                        List<Usuario> todos = usuarioRepository.findAll();
+                        if (!todos.isEmpty()) {
+                            return todos.get(0);
+                        }
+                        Usuario mockAdmin = new Usuario();
+                        mockAdmin.setNombre("Admin Principal");
+                        mockAdmin.setEmail("admin@puntoycoma.com");
+                        mockAdmin.setPassword("password");
+                        mockAdmin.setRol("ADMIN");
+                        mockAdmin.setActivo(true);
+                        mockAdmin.setHabilitado(true);
+                        return usuarioRepository.save(mockAdmin);
+                    });
+            nuevoChat.setUsuario(admin);
+            chat = nuevoChat;
+        }
 
         // Actualizar datos del chat
         chat.setUltimoMensaje(contenido);
         chat.setFechaUltimaActualizacion(LocalDateTime.now());
-        chat.setUnreadCount(chat.getUnreadCount() + 1);
+        
+        // Si el remitente es el administrador, ponemos a 0 los no leídos; si es cliente, sumamos 1
+        if ("ADMINISTRADOR".equalsIgnoreCase(remitente)) {
+            chat.setUnreadCount(0);
+        } else {
+            chat.setUnreadCount(chat.getUnreadCount() + 1);
+        }
+        
         Chat chatGuardado = chatRepository.save(chat);
 
         // Guardar burbuja de mensaje
         Mensaje mensaje = new Mensaje();
         mensaje.setChat(chatGuardado);
         mensaje.setContenido(contenido);
-        mensaje.setRemitente("CLIENTE");
+        mensaje.setRemitente(remitente);
         mensaje.setFechaEnvio(LocalDateTime.now());
         mensaje.setWamid(wamid);
         mensajeRepository.save(mensaje);
+    }
+
+    @Override
+    @Transactional
+    public void eliminarChat(Long chatId) {
+        List<Mensaje> mensajes = mensajeRepository.findByChatIdOrderByFechaEnvioAsc(chatId);
+        if (mensajes != null && !mensajes.isEmpty()) {
+            mensajeRepository.deleteAll(mensajes);
+        }
+        chatRepository.deleteById(chatId);
     }
 
     // ── Mapeos manuales ──────────────────────────────────────────────────────

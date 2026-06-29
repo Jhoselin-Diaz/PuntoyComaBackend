@@ -8,9 +8,18 @@ public interface ChatService {
     List<ChatDTO> obtenerTodosLosChats();
     List<MensajeDTO> obtenerMensajesDeChat(Long chatId);
     MensajeDTO enviarMensajeAdmin(Long chatId, String texto);
-    void registrarMensajeCliente(String telefono, String nombreCliente, String contenido, String wamid);
+    void registrarMensaje(String telefono, String lid, String nombre, String contenido, String wamid, String remitente);
+    void eliminarChat(Long chatId);
+
+    default void registrarMensaje(String telefono, String nombre, String contenido, String wamid, String remitente) {
+        registrarMensaje(telefono, null, nombre, contenido, wamid, remitente);
+    }
+
+    default void registrarMensajeCliente(String telefono, String nombreCliente, String contenido, String wamid) {
+        registrarMensaje(telefono, null, nombreCliente, contenido, wamid, "CLIENTE");
+    }
 
     default void guardarMensajeEntrante(String telefono, String nombre, String texto, String wamid) {
-        registrarMensajeCliente(telefono, nombre, texto, wamid);
+        registrarMensaje(telefono, null, nombre, texto, wamid, "CLIENTE");
     }
 }

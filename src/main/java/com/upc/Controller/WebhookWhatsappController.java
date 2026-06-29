@@ -96,6 +96,7 @@ public class WebhookWhatsappController {
      */
     @PostMapping
     public ResponseEntity<String> recibirMensaje(@RequestBody(required = false) String rawPayload) {
+        System.out.println(">>> [Java Webhook] POST /webhook INTERCEPTADO EXPLICITAMENTE! rawPayload: " + rawPayload);
         log.info("[WhatsApp Webhook] POST recibido - Raw Payload: {}", rawPayload);
 
         HttpHeaders headers = new HttpHeaders();
@@ -110,58 +111,140 @@ public class WebhookWhatsappController {
             // Deserializar manualmente
             JsonNode payload = objectMapper.readTree(rawPayload);
 
-            // 1. Navegar de forma segura: entry[0] -> changes[0] -> value
-            JsonNode entryNode = payload.path("entry").get(0);
-            if (entryNode != null) {
-                JsonNode changeNode = entryNode.path("changes").get(0);
-                if (changeNode != null) {
-                    JsonNode valueNode = changeNode.path("value");
+            // ─── 1. DETECCIÓN AUTOMÁTICA DE FORMATO: EVOLUTION API ───────────
+            if (payload.has("event")) {
+                String event = payload.path("event").asText();
+                log.info("[WhatsApp Webhook] Formato Evolution API detectado - Evento: {}", event);
 
-                    // 2. Si contiene la lista 'messages', extrae el primer mensaje: messages[0]
-                    if (valueNode != null && valueNode.has("messages")) {
-                        JsonNode messageNode = valueNode.path("messages").get(0);
+                if ("messages.upsert".equals(event)) {
+                    JsonNode dataNode = payload.path("data");
+                    if (dataNode != null) {
+                        JsonNode keyNode = dataNode.path("key");
+                        String remoteJid = keyNode.path("remoteJid").asText();
+                        String wamid = keyNode.path("id").asText();
+                        boolean fromMe = keyNode.path("fromMe").asBoolean(false);
+
+                        // Limpiar número de teléfono de forma agresiva (ej. "51933526011@c.us" -> "51933526011")
+                        String telefono = (remoteJid != null) ? remoteJid.split("@")[0].replaceAll("[^0-9]", "") : null;
+
+                        // Obtener el LID original si fue enviado
+                        String lid = null;
+                        if (dataNode.has("lid")) {
+                            String rawLid = dataNode.path("lid").asText();
+                            if (rawLid != null && !rawLid.trim().isEmpty()) {
+                                lid = rawLid.split("@")[0].replaceAll("[^0-9]", "");
+                            }
+                        }
+
+                        // Nombre de perfil pushName
+                        String nombre = dataNode.path("pushName").asText("Cliente WhatsApp");
+                        if (nombre == null || nombre.trim().isEmpty()) {
+                            nombre = "Cliente WhatsApp";
+                        }
+
+                        // Determinar remitente basándonos en fromMe
+                        String remitente = fromMe ? "ADMINISTRADOR" : "CLIENTE";
+
+                        // Extraer contenido según el tipo de mensaje
+                        JsonNode messageNode = dataNode.path("message");
+                        String texto = null;
+
                         if (messageNode != null) {
+                            if (messageNode.has("conversation")) {
+                                texto = messageNode.path("conversation").asText();
+                            } else if (messageNode.has("extendedTextMessage")) {
+                                texto = messageNode.path("extendedTextMessage").path("text").asText();
+                            } else if (messageNode.has("imageMessage")) {
+                                JsonNode imgMsg = messageNode.path("imageMessage");
+                                String mediaUrl = imgMsg.path("mediaUrl").asText();
+                                if (mediaUrl == null || mediaUrl.trim().isEmpty()) {
+                                    mediaUrl = imgMsg.path("url").asText();
+                                }
+                                String caption = imgMsg.path("caption").asText();
 
-                            // 3. Obtener el teléfono del remitente de message.from o contacts[0].wa_id
-                            String telefono = null;
-                            if (messageNode.has("from")) {
-                                telefono = messageNode.path("from").asText();
-                            }
-
-                            JsonNode contactsNode = valueNode.path("contacts");
-                            JsonNode contactNode = contactsNode != null ? contactsNode.get(0) : null;
-
-                            if (telefono == null && contactNode != null && contactNode.has("wa_id")) {
-                                telefono = contactNode.path("wa_id").asText();
-                            }
-
-                            // 4. Obtener nombre de contact -> profile -> name
-                            String nombre = "Cliente WhatsApp";
-                            if (contactNode != null) {
-                                JsonNode profileNode = contactNode.path("profile");
-                                if (profileNode != null && profileNode.has("name")) {
-                                    nombre = profileNode.path("name").asText();
+                                // Opción B: Prefijar con [VOUCHER] URL de imagen
+                                texto = "[VOUCHER] " + mediaUrl;
+                                if (caption != null && !caption.trim().isEmpty()) {
+                                    texto += " | " + caption;
+                                }
+                            } else if (messageNode.has("documentMessage")) {
+                                JsonNode docMsg = messageNode.path("documentMessage");
+                                String mediaUrl = docMsg.path("mediaUrl").asText();
+                                String fileName = docMsg.path("fileName").asText();
+                                texto = "[DOCUMENTO] " + mediaUrl;
+                                if (fileName != null && !fileName.trim().isEmpty()) {
+                                    texto += " | " + fileName;
                                 }
                             }
+                        }
 
-                            if ("Jhoselin".equalsIgnoreCase(nombre)) {
-                                nombre = "Jhoselin";
-                            }
+                        if (telefono != null && texto != null && !texto.trim().isEmpty()) {
+                            log.info("[WhatsApp Webhook] Evolution API - Guardando mensaje - Remitente: {} | Teléfono: {} | LID: {} | Contenido: {}", remitente, telefono, lid, texto);
+                            chatService.registrarMensaje(telefono, lid, nombre, texto, wamid, remitente);
+                        }
+                    }
+                }
+            }
+            // ─── 2. DETECCIÓN AUTOMÁTICA DE FORMATO: META CLOUD API ──────────
+            else {
+                log.info("[WhatsApp Webhook] Formato Meta Cloud API detectado.");
 
-                            // 5. Obtener texto de message -> text -> body o button
-                            String texto = null;
-                            if (messageNode.has("text")) {
-                                texto = messageNode.path("text").path("body").asText();
-                            } else if (messageNode.has("button")) {
-                                texto = messageNode.path("button").path("text").asText();
-                            }
+                JsonNode entryNode = payload.path("entry").get(0);
+                if (entryNode != null) {
+                    JsonNode changeNode = entryNode.path("changes").get(0);
+                    if (changeNode != null) {
+                        JsonNode valueNode = changeNode.path("value");
 
-                            String wamid = messageNode.path("id").asText();
+                        // Si contiene la lista 'messages', extrae el primer mensaje: messages[0]
+                        if (valueNode != null && valueNode.has("messages")) {
+                            JsonNode messageNode = valueNode.path("messages").get(0);
+                            if (messageNode != null) {
 
-                            if (telefono != null && texto != null && !texto.trim().isEmpty()) {
-                                log.info("[WhatsApp Webhook] Mensaje parseado con éxito: Remitente: {} | Teléfono: {} | Contenido: {}", nombre, telefono, texto);
-                                // 6. Persistir en la base de datos Supabase
-                                chatService.guardarMensajeEntrante(telefono, nombre, texto, wamid);
+                                // Obtener el teléfono del remitente de message.from o contacts[0].wa_id
+                                String telefono = null;
+                                if (messageNode.has("from")) {
+                                    telefono = messageNode.path("from").asText();
+                                }
+
+                                JsonNode contactsNode = valueNode.path("contacts");
+                                JsonNode contactNode = contactsNode != null ? contactsNode.get(0) : null;
+
+                                if (telefono == null && contactNode != null && contactNode.has("wa_id")) {
+                                    telefono = contactNode.path("wa_id").asText();
+                                }
+
+                                // Limpiar número de teléfono de forma agresiva
+                                if (telefono != null) {
+                                    telefono = telefono.split("@")[0].replaceAll("[^0-9]", "");
+                                }
+
+                                // Obtener nombre de contact -> profile -> name
+                                String nombre = "Cliente WhatsApp";
+                                if (contactNode != null) {
+                                    JsonNode profileNode = contactNode.path("profile");
+                                    if (profileNode != null && profileNode.has("name")) {
+                                        nombre = profileNode.path("name").asText();
+                                    }
+                                }
+
+                                if ("Jhoselin".equalsIgnoreCase(nombre)) {
+                                    nombre = "Jhoselin";
+                                }
+
+                                // Obtener texto de message -> text -> body o button
+                                String texto = null;
+                                if (messageNode.has("text")) {
+                                    texto = messageNode.path("text").path("body").asText();
+                                } else if (messageNode.has("button")) {
+                                    texto = messageNode.path("button").path("text").asText();
+                                }
+
+                                String wamid = messageNode.path("id").asText();
+
+                                if (telefono != null && texto != null && !texto.trim().isEmpty()) {
+                                    log.info("[WhatsApp Webhook] Meta API - Guardando mensaje - Remitente: CLIENTE | Teléfono: {} | Contenido: {}", telefono, texto);
+                                    chatService.registrarMensaje(telefono, nombre, texto, wamid, "CLIENTE");
+                                }
                             }
                         }
                     }
@@ -171,7 +254,7 @@ public class WebhookWhatsappController {
             log.error("[WhatsApp Webhook] Error crítico parseando o persistiendo payload: {}", e.getMessage(), e);
         }
 
-        // Siempre responder 200 OK a Meta con la cabecera de Ngrok
+        // Siempre responder 200 OK con la cabecera de Ngrok
         return ResponseEntity.ok().headers(headers).body("EVENT_RECEIVED");
     }
 
