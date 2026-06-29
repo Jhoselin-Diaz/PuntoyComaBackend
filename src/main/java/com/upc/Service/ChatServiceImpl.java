@@ -31,10 +31,16 @@ public class ChatServiceImpl implements ChatService {
     @Autowired
     private WhatsappService whatsappService;
 
+    @Autowired
+    private OpenAiService openAiService;
+
+    @Autowired
+    private ConciliacionVoucherService conciliacionVoucherService;
+
     @Override
     @Transactional(readOnly = true)
     public List<ChatDTO> obtenerTodosLosChats() {
-        return chatRepository.findAllByOrderByFechaUltimaActualizacionDesc().stream()
+        return chatRepository.findAllChatsOrderedByPriorityAndDate().stream()
                 .map(this::convertChatToDto)
                 .collect(Collectors.toList());
     }
@@ -147,6 +153,46 @@ public class ChatServiceImpl implements ChatService {
         mensaje.setFechaEnvio(LocalDateTime.now());
         mensaje.setWamid(wamid);
         mensajeRepository.save(mensaje);
+
+        // Lanzar análisis asíncrono de OpenAI si el mensaje proviene del cliente
+        if ("CLIENTE".equalsIgnoreCase(remitente)) {
+            try {
+                if (org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive()) {
+                    org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                        new org.springframework.transaction.support.TransactionSynchronization() {
+                            @Override
+                            public void afterCommit() {
+                                openAiService.procesarMensajeConIA(chatGuardado.getId(), telefono, contenido);
+                            }
+                        }
+                    );
+                } else {
+                    openAiService.procesarMensajeConIA(chatGuardado.getId(), telefono, contenido);
+                }
+            } catch (Exception e) {
+                System.err.println("[ChatService] Error lanzando procesamiento de OpenAI de forma asíncrona: " + e.getMessage());
+            }
+
+            // Lanzar conciliación asíncrona de voucher si es una imagen
+            if (contenido != null && contenido.startsWith("[VOUCHER]")) {
+                try {
+                    if (org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive()) {
+                        org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                            new org.springframework.transaction.support.TransactionSynchronization() {
+                                @Override
+                                public void afterCommit() {
+                                    conciliacionVoucherService.procesarYConciliarVoucher(telefono, contenido);
+                                }
+                            }
+                        );
+                    } else {
+                        conciliacionVoucherService.procesarYConciliarVoucher(telefono, contenido);
+                    }
+                } catch (Exception e) {
+                    System.err.println("[ChatService] Error disparando conciliación OCR: " + e.getMessage());
+                }
+            }
+        }
     }
 
     @Override
@@ -169,6 +215,13 @@ public class ChatServiceImpl implements ChatService {
         dto.setUltimoMensaje(chat.getUltimoMensaje());
         dto.setFechaUltimaActualizacion(chat.getFechaUltimaActualizacion());
         dto.setUnreadCount(chat.getUnreadCount());
+        dto.setPrioridad(chat.getPrioridad());
+        dto.setSugerenciaIa(chat.getSugerenciaIa());
+        dto.setPedidoReferenciadoId(chat.getPedidoReferenciadoId());
+        dto.setPedidoIdentificado(chat.getPedidoIdentificado());
+        dto.setDireccionDetectada(chat.getDireccionDetectada());
+        dto.setDatosCompletos(chat.getDatosCompletos());
+        dto.setFasePedido(chat.getFasePedido());
         return dto;
     }
 
@@ -183,5 +236,20 @@ public class ChatServiceImpl implements ChatService {
             dto.setChatId(mensaje.getChat().getId());
         }
         return dto;
+    }
+
+    @Override
+    @Transactional
+    public void regenerarRespuestaIA(Long chatId) {
+        Chat chat = chatRepository.findById(chatId).orElseThrow(() -> new RuntimeException("Chat no encontrado"));
+        List<Mensaje> msgs = mensajeRepository.findTop10ByChatIdOrderByFechaEnvioDesc(chatId);
+        String ultimoContenido = "";
+        for (Mensaje m : msgs) {
+            if ("CLIENTE".equalsIgnoreCase(m.getRemitente())) {
+                ultimoContenido = m.getContenido();
+                break;
+            }
+        }
+        openAiService.procesarMensajeConIA(chatId, chat.getTelefonoCliente(), ultimoContenido);
     }
 }

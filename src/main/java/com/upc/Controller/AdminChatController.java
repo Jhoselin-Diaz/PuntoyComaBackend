@@ -58,4 +58,12 @@ public class AdminChatController {
         chatService.eliminarChat(chatId);
         return new ResponseEntity<>(HttpStatus.NO_CONTENT);
     }
+
+    @PostMapping("/{chatId}/regenerar-ia")
+    public ResponseEntity<Map<String, String>> regenerarRespuestaIA(@PathVariable Long chatId) {
+        chatService.regenerarRespuestaIA(chatId);
+        Map<String, String> response = new java.util.HashMap<>();
+        response.put("status", "procesando");
+        return new ResponseEntity<>(response, HttpStatus.OK);
+    }
 }

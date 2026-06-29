@@ -35,7 +35,7 @@ public class Pedido {
     private Usuario usuario;
 
     // OCR audit and conciliation fields
-    @Column(name = "monto_detectado")
+    @Column(name = "monto_ocr")
     private Double montoDetectado;
 
     private Double diferencia;
@@ -51,4 +51,32 @@ public class Pedido {
 
     @Column(name = "resultado_conciliacion")
     private String resultadoConciliacion;
+
+    @Column(name = "nombre_completo")
+    private String nombreCompleto;
+
+    @Column(name = "direccion_entrega")
+    private String direccionEntrega;
+
+    @Column(name = "telefono_contacto")
+    private String telefonoContacto;
+
+    @Column(name = "variantes_especificas")
+    private String variantesEspecificas;
+
+    public void setDireccionEnvio(String direccionEnvio) {
+        this.direccionEntrega = direccionEnvio;
+    }
+
+    public String getDireccionEnvio() {
+        return this.direccionEntrega;
+    }
+
+    public Double getMontoOcr() {
+        return this.montoDetectado;
+    }
+
+    public void setMontoOcr(Double montoOcr) {
+        this.montoDetectado = montoOcr;
+    }
 }

@@ -9,4 +9,5 @@ import java.util.List;
 @Repository
 public interface MensajeRepository extends JpaRepository<Mensaje, Long> {
     List<Mensaje> findByChatIdOrderByFechaEnvioAsc(Long chatId);
+    List<Mensaje> findTop10ByChatIdOrderByFechaEnvioDesc(Long chatId);
 }

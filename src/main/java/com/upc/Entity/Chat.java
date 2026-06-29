@@ -35,5 +35,26 @@ public class Chat {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "usuario_id", nullable = false)
     private Usuario usuario;
+
+    @Column(name = "prioridad")
+    private String prioridad; // "ALTA", "INTERMEDIA", "BAJA"
+
+    @Column(name = "sugerencia_ia", columnDefinition = "TEXT")
+    private String sugerenciaIa;
+
+    @Column(name = "pedido_referenciado_id")
+    private Long pedidoReferenciadoId;
+
+    @Column(name = "pedido_identificado")
+    private Boolean pedidoIdentificado;
+
+    @Column(name = "direccion_detectada")
+    private Boolean direccionDetectada;
+
+    @Column(name = "datos_completos")
+    private Boolean datosCompletos;
+
+    @Column(name = "fase_pedido")
+    private String fasePedido; // "INICIAL", "CONCILIACION", "RECLAMO_CONSULTA"
 }
 

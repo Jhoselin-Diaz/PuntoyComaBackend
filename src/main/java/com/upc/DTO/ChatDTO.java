@@ -15,4 +15,11 @@ public class ChatDTO {
     private String ultimoMensaje;
     private LocalDateTime fechaUltimaActualizacion;
     private Integer unreadCount;
+    private String prioridad;
+    private String sugerenciaIa;
+    private Long pedidoReferenciadoId;
+    private Boolean pedidoIdentificado;
+    private Boolean direccionDetectada;
+    private Boolean datosCompletos;
+    private String fasePedido;
 }
