@@ -254,7 +254,7 @@ public class WebhookWhatsappController {
             log.error("[WhatsApp Webhook] Error crítico parseando o persistiendo payload: {}", e.getMessage(), e);
         }
 
-        // Siempre responder 200 OK con la cabecera de Ngrok
+        // Siempre responder 200 OK a Meta con la cabecera de Ngrok
         return ResponseEntity.ok().headers(headers).body("EVENT_RECEIVED");
     }
 
