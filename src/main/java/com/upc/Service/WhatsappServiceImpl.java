@@ -7,6 +7,7 @@ import com.upc.Entity.Usuario;
 import com.upc.Repository.ChatRepository;
 import com.upc.Repository.MensajeRepository;
 import com.upc.Repository.UsuarioRepository;
+import com.fasterxml.jackson.databind.JsonNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -17,6 +18,7 @@ import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -43,6 +45,16 @@ public class WhatsappServiceImpl implements WhatsappService {
 
     @Value("${whatsapp.api-url}")
     private String apiUrl;
+
+    // ── Evolution API Configuration ──────────────────────────────────────────
+    @Value("${whatsapp.api.url:}")
+    private String evolutionApiUrl;
+
+    @Value("${whatsapp.api.key:}")
+    private String evolutionApiKey;
+
+    @Value("${whatsapp.api.instance:}")
+    private String evolutionApiInstance;
 
     private final RestTemplate restTemplate;
     private final ChatRepository chatRepository;
@@ -138,11 +150,82 @@ public class WhatsappServiceImpl implements WhatsappService {
     @Override
     public WhatsappApiResponseDTO enviarMensajeTexto(String destinatario, String texto) {
 
-        // ── 1. Construir la URL ───────────────────────────────────────────────
+        // ─── 1. ENVÍO VÍA EVOLUTION API (WHATSAPP WEB) SI ESTÁ CONFIGURADO ─────
+        if (evolutionApiUrl != null && !evolutionApiUrl.trim().isEmpty() 
+                && !evolutionApiUrl.contains("SU_EVOLUTION_API_URL_AQUI")) {
+            
+            String url = evolutionApiUrl + "/message/sendText/" + evolutionApiInstance;
+
+            // Formatear destinatario si no contiene sufijo o formato esperado por Evolution
+            String numeroDestino = destinatario;
+            // Evolution API prefiere solo dígitos sin '+'
+            if (numeroDestino.startsWith("+")) {
+                numeroDestino = numeroDestino.substring(1);
+            }
+
+            // Construir el body de Evolution API
+            Map<String, Object> body = Map.of(
+                    "number", numeroDestino,
+                    "textMessage", Map.of("text", texto),
+                    "options", Map.of(
+                            "delay", 1000,
+                            "presence", "composing",
+                            "linkPreview", false
+                    )
+            );
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            headers.set("apikey", evolutionApiKey);
+
+            HttpEntity<Map<String, Object>> request = new HttpEntity<>(body, headers);
+
+            try {
+                log.info("[WhatsApp] Enviando mensaje por Evolution API a {} | texto: \"{}\"", numeroDestino, texto);
+
+                ResponseEntity<JsonNode> response = restTemplate.exchange(
+                        url,
+                        HttpMethod.POST,
+                        request,
+                        JsonNode.class
+                );
+
+                JsonNode resBody = response.getBody();
+                String wamid = "evolution-" + System.currentTimeMillis();
+                
+                if (resBody != null) {
+                    JsonNode keyNode = resBody.path("key");
+                    if (keyNode.has("id")) {
+                        wamid = keyNode.path("id").asText();
+                    }
+                }
+
+                log.info("[WhatsApp] ✅ Mensaje enviado por Evolution API. wamid asignado: {}", wamid);
+
+                // Adaptador de respuesta para cumplir con la firma del método
+                WhatsappApiResponseDTO respuestaAdapter = new WhatsappApiResponseDTO();
+                respuestaAdapter.setMessagingProduct("whatsapp");
+                
+                WhatsappApiResponseDTO.MensajeEnviadoDTO msgDto = new WhatsappApiResponseDTO.MensajeEnviadoDTO();
+                msgDto.setId(wamid);
+                msgDto.setMessageStatus("accepted");
+                
+                respuestaAdapter.setMessages(List.of(msgDto));
+                return respuestaAdapter;
+
+            } catch (HttpClientErrorException ex) {
+                log.error("[WhatsApp] ❌ Error HTTP {} en Evolution API al enviar a {}: {}",
+                        ex.getStatusCode(), numeroDestino, ex.getResponseBodyAsString());
+                throw new RuntimeException("Error en Evolution API: " + ex.getResponseBodyAsString(), ex);
+            } catch (Exception ex) {
+                log.error("[WhatsApp] ❌ Error inesperado en Evolution API al enviar a {}: {}", numeroDestino, ex.getMessage());
+                throw new RuntimeException("Error inesperado en Evolution API.", ex);
+            }
+        }
+
+        // ─── 2. FALLBACK VÍA META CLOUD API (CÓDIGO ORIGINAL) ─────────────────
         String url = apiUrl + "/" + phoneNumberId + "/messages";
 
-        // ── 2. Body de texto libre (válido dentro de la ventana de 24 h) ────────
-        //    Meta permite type=text cuando el cliente nos escribió primero.
         Map<String, Object> body = Map.of(
                 "messaging_product", "whatsapp",
                 "recipient_type",    "individual",
@@ -154,16 +237,14 @@ public class WhatsappServiceImpl implements WhatsappService {
                 )
         );
 
-        // ── 3. Construir las cabeceras HTTP ───────────────────────────────────
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
-        headers.setBearerAuth(accessToken);           // → Authorization: Bearer {token}
+        headers.setBearerAuth(accessToken);
 
         HttpEntity<Map<String, Object>> request = new HttpEntity<>(body, headers);
 
-        // ── 4. Ejecutar la petición POST ──────────────────────────────────────
         try {
-            log.info("[WhatsApp] Enviando texto libre a {} | mensaje: \"{}\"", destinatario, texto);
+            log.info("[WhatsApp] Enviando texto libre por Meta API a {} | mensaje: \"{}\"", destinatario, texto);
 
             ResponseEntity<WhatsappApiResponseDTO> response = restTemplate.exchange(
                     url,
@@ -176,19 +257,18 @@ public class WhatsappServiceImpl implements WhatsappService {
 
             if (respuesta != null && respuesta.getMessages() != null && !respuesta.getMessages().isEmpty()) {
                 String wamid = respuesta.getMessages().get(0).getId();
-                log.info("[WhatsApp] ✅ Mensaje enviado correctamente. wamid: {}", wamid);
+                log.info("[WhatsApp] ✅ Mensaje enviado por Meta API. wamid: {}", wamid);
             }
 
             return respuesta;
 
         } catch (HttpClientErrorException ex) {
-            // Error del lado del cliente (401 token inválido, 400 número mal formado, etc.)
-            log.error("[WhatsApp] ❌ Error HTTP {} al enviar mensaje a {}: {}",
+            log.error("[WhatsApp] ❌ Error HTTP {} en Meta API al enviar a {}: {}",
                     ex.getStatusCode(), destinatario, ex.getResponseBodyAsString());
-            throw new RuntimeException("Error al enviar mensaje por WhatsApp: " + ex.getResponseBodyAsString(), ex);
+            throw new RuntimeException("Error en Meta API: " + ex.getResponseBodyAsString(), ex);
         } catch (Exception ex) {
-            log.error("[WhatsApp] ❌ Error inesperado al enviar mensaje a {}: {}", destinatario, ex.getMessage());
-            throw new RuntimeException("Error inesperado al enviar mensaje por WhatsApp.", ex);
+            log.error("[WhatsApp] ❌ Error inesperado en Meta API al enviar a {}: {}", destinatario, ex.getMessage());
+            throw new RuntimeException("Error inesperado en Meta API.", ex);
         }
     }
 

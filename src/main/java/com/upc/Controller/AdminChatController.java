@@ -52,4 +52,10 @@ public class AdminChatController {
         MensajeDTO creado = chatService.enviarMensajeAdmin(chatId, texto);
         return new ResponseEntity<>(creado, HttpStatus.CREATED);
     }
+
+    @DeleteMapping("/{chatId}")
+    public ResponseEntity<Void> eliminarChat(@PathVariable Long chatId) {
+        chatService.eliminarChat(chatId);
+        return new ResponseEntity<>(HttpStatus.NO_CONTENT);
+    }
 }
