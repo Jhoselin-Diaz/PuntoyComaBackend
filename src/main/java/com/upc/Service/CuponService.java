@@ -10,4 +10,5 @@ public interface CuponService {
     Cupon actualizar(Long id, Cupon cupon);
     void eliminar(Long id);
     Optional<Cupon> validarCupon(String codigo);
+    Cupon registrarUso(Long id);
 }

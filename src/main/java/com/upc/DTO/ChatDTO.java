@@ -22,4 +22,5 @@ public class ChatDTO {
     private Boolean direccionDetectada;
     private Boolean datosCompletos;
     private String fasePedido;
+    private String contextoInmediato;
 }

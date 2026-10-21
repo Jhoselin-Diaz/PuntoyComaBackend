@@ -35,6 +35,16 @@ public class Producto {
     private Boolean destacado;
     private Boolean nuevo;
 
+    @Column(name = "codigo_sku")
+    private String codigoSku;
+
+    public String getSku() {
+        if (this.codigoSku != null && !this.codigoSku.trim().isEmpty()) {
+            return this.codigoSku;
+        }
+        return this.id != null ? "PC-" + this.id : "-";
+    }
+
     // Technical sheet / extended specifications fields
     private String subtitulo;
 

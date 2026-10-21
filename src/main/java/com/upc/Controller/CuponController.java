@@ -10,7 +10,7 @@ import java.util.List;
 
 @RestController
 @RequestMapping({"/api/v1/cupones", "/api/cupones"})
-@CrossOrigin(origins = "http://localhost:4200")
+@CrossOrigin(origins = {"http://localhost:4200", "https://puntoycoma-store.netlify.app", "https://puntoycoma-store.netlify.app/"})
 public class CuponController {
 
     @Autowired
@@ -42,5 +42,10 @@ public class CuponController {
         return service.validarCupon(codigo)
                 .map(cupon -> new ResponseEntity<>(cupon, HttpStatus.OK))
                 .orElseGet(() -> new ResponseEntity<>(HttpStatus.NOT_FOUND));
+    }
+
+    @PostMapping("/{id}/usar")
+    public ResponseEntity<Cupon> registrarUso(@PathVariable Long id) {
+        return new ResponseEntity<>(service.registrarUso(id), HttpStatus.OK);
     }
 }

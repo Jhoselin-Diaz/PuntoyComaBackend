@@ -11,12 +11,68 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 
 @RestController
-@RequestMapping({"/api/v1/productos", "/api/productos"})
-@CrossOrigin(origins = "http://localhost:4200")
+@RequestMapping({"/api/v1/productos", "/api/productos", "/api/admin/productos", "/admin/productos"})
+@CrossOrigin(origins = {"http://localhost:4200", "https://puntoycoma-store.netlify.app", "https://puntoycoma-store.netlify.app/"})
 public class ProductoController {
 
     @Autowired
     private ProductoService productoService;
+
+    @Autowired
+    private com.upc.Repository.ProductoRepository productoRepository;
+
+    @Autowired
+    private org.modelmapper.ModelMapper modelMapper;
+
+    @PostMapping(value = {"/{id}/imagen", "/{id}/image"}, consumes = org.springframework.http.MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<?> subirImagenProducto(
+            @PathVariable Long id,
+            @RequestParam(value = "file", required = false) org.springframework.web.multipart.MultipartFile file,
+            @RequestParam(value = "imagen", required = false) org.springframework.web.multipart.MultipartFile imagen) {
+
+        org.springframework.web.multipart.MultipartFile archivo = (file != null && !file.isEmpty()) ? file : imagen;
+        if (archivo == null || archivo.isEmpty()) {
+            return ResponseEntity.badRequest().body(java.util.Map.of("error", "El archivo de imagen es requerido y no puede estar vacío."));
+        }
+
+        String originalFilename = archivo.getOriginalFilename();
+        String extension = ".png";
+        if (originalFilename != null && originalFilename.contains(".")) {
+            String ext = originalFilename.substring(originalFilename.lastIndexOf(".")).toLowerCase();
+            if (ext.matches("\\.(jpg|jpeg|png|webp|gif)")) {
+                extension = ext;
+            }
+        }
+
+        try {
+            java.nio.file.Path uploadsDir = java.nio.file.Paths.get("uploads", "productos");
+            if (!java.nio.file.Files.exists(uploadsDir)) {
+                java.nio.file.Files.createDirectories(uploadsDir);
+            }
+
+            String filename = "prod_" + id + "_" + System.currentTimeMillis() + extension;
+            java.nio.file.Path targetPath = uploadsDir.resolve(filename);
+            java.nio.file.Files.copy(archivo.getInputStream(), targetPath, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+
+            String publicUrl = "http://localhost:8080/uploads/productos/" + filename;
+
+            com.upc.Entity.Producto producto = productoRepository.findById(id)
+                    .orElseThrow(() -> new RuntimeException("Producto no encontrado con el ID: " + id));
+
+            producto.setImageUrl(publicUrl);
+            producto.setImagenPrincipal(publicUrl);
+            com.upc.Entity.Producto guardado = productoRepository.save(producto);
+
+            ProductoDTO dto = modelMapper.map(guardado, ProductoDTO.class);
+            dto.setImageUrl(publicUrl);
+            dto.setImagenPrincipal(publicUrl);
+
+            return ResponseEntity.ok(dto);
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(java.util.Map.of("error", "Error al guardar la imagen: " + e.getMessage()));
+        }
+    }
 
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
@@ -85,7 +141,7 @@ public class ProductoController {
         return new ResponseEntity<>(HttpStatus.NO_CONTENT);
     }
 
-    @CrossOrigin(origins = "http://localhost:4200")
+    @CrossOrigin(origins = {"http://localhost:4200", "https://puntoycoma-store.netlify.app", "https://puntoycoma-store.netlify.app/"})
     @PatchMapping("/{id}/visibilidad")
     public ResponseEntity<ProductoDTO> actualizarVisibilidad(
             @PathVariable Long id,
@@ -94,7 +150,7 @@ public class ProductoController {
         return new ResponseEntity<>(actualizado, HttpStatus.OK);
     }
 
-    @CrossOrigin(origins = "http://localhost:4200")
+    @CrossOrigin(origins = {"http://localhost:4200", "https://puntoycoma-store.netlify.app", "https://puntoycoma-store.netlify.app/"})
     @PutMapping("/{id}")
     public ResponseEntity<ProductoDTO> actualizarProducto(
             @PathVariable Long id,

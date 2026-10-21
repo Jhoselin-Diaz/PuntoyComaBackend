@@ -1,5 +1,6 @@
 package com.upc.Service;
 
+import com.upc.DTO.WhatsappStatusDTO;
 import com.upc.DTO.Whatsapp.*;
 import com.upc.Entity.Chat;
 import com.upc.Entity.Mensaje;
@@ -270,6 +271,32 @@ public class WhatsappServiceImpl implements WhatsappService {
             log.error("[WhatsApp] ❌ Error inesperado en Meta API al enviar a {}: {}", destinatario, ex.getMessage());
             throw new RuntimeException("Error inesperado en Meta API.", ex);
         }
+    }
+
+    // =========================================================================
+    // CONSULTA DE ESTADO — Puente Node.js / WhatsApp Web
+    // =========================================================================
+
+    @Override
+    public WhatsappStatusDTO obtenerEstadoWhatsapp() {
+        if (evolutionApiUrl == null || evolutionApiUrl.trim().isEmpty()) {
+            log.warn("[WhatsApp] URL de puente Node.js no configurada. Devolviendo estado DISCONNECTED.");
+            return new WhatsappStatusDTO("DISCONNECTED", null);
+        }
+
+        String statusUrl = evolutionApiUrl + "/status";
+
+        try {
+            log.debug("[WhatsApp] Consultando estado del puente Node.js en: {}", statusUrl);
+            ResponseEntity<WhatsappStatusDTO> response = restTemplate.getForEntity(statusUrl, WhatsappStatusDTO.class);
+            if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
+                return response.getBody();
+            }
+        } catch (Exception ex) {
+            log.warn("[WhatsApp] No se pudo conectar con el puente Node.js en {}: {}", statusUrl, ex.getMessage());
+        }
+
+        return new WhatsappStatusDTO("DISCONNECTED", null);
     }
 
     // =========================================================================

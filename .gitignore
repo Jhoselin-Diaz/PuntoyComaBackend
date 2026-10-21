@@ -32,3 +32,8 @@ build/
 ### VS Code ###
 .vscode/
 puente-whatsapp/.wwebjs_auth/
+
+node_modules/
+puente-whatsapp/node_modules/
+puente-whatsapp/.wwebjs_cache/
+puente-whatsapp/.wwebjs_auth/

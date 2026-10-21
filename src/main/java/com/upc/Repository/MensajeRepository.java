@@ -10,4 +10,6 @@ import java.util.List;
 public interface MensajeRepository extends JpaRepository<Mensaje, Long> {
     List<Mensaje> findByChatIdOrderByFechaEnvioAsc(Long chatId);
     List<Mensaje> findTop10ByChatIdOrderByFechaEnvioDesc(Long chatId);
+    boolean existsByWamid(String wamid);
+    java.util.Optional<Mensaje> findByWamid(String wamid);
 }

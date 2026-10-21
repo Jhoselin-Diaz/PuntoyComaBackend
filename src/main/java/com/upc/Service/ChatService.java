@@ -10,7 +10,7 @@ public interface ChatService {
     MensajeDTO enviarMensajeAdmin(Long chatId, String texto);
     void registrarMensaje(String telefono, String lid, String nombreCliente, String contenido, String wamid, String remitente);
     void eliminarChat(Long chatId);
-    void regenerarRespuestaIA(Long chatId);
+    ChatDTO regenerarRespuestaIA(Long chatId);
 
     default void registrarMensaje(String telefono, String nombre, String contenido, String wamid, String remitente) {
         registrarMensaje(telefono, null, nombre, contenido, wamid, remitente);

@@ -4,9 +4,11 @@ import com.upc.DTO.ChatDTO;
 import com.upc.DTO.MensajeDTO;
 import com.upc.Entity.Chat;
 import com.upc.Entity.Mensaje;
+import com.upc.Entity.Pedido;
 import com.upc.Entity.Usuario;
 import com.upc.Repository.ChatRepository;
 import com.upc.Repository.MensajeRepository;
+import com.upc.Repository.PedidoRepository;
 import com.upc.Repository.UsuarioRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -36,6 +38,9 @@ public class ChatServiceImpl implements ChatService {
 
     @Autowired
     private ConciliacionVoucherService conciliacionVoucherService;
+
+    @Autowired
+    private PedidoRepository pedidoRepository;
 
     @Override
     @Transactional(readOnly = true)
@@ -79,7 +84,7 @@ public class ChatServiceImpl implements ChatService {
         Mensaje guardado = mensajeRepository.save(mensaje);
 
         // Actualizar datos del chat
-        chat.setUltimoMensaje(texto);
+        chat.setUltimoMensaje(sanitizarUltimoMensaje(texto));
         chat.setFechaUltimaActualizacion(LocalDateTime.now());
         chat.setUnreadCount(0);
         chatRepository.save(chat);
@@ -90,6 +95,53 @@ public class ChatServiceImpl implements ChatService {
     @Override
     @Transactional
     public void registrarMensaje(String telefono, String lid, String nombreCliente, String contenido, String wamid, String remitente) {
+        // 0. Protección contra duplicados basada en el ID real de WhatsApp (wamid) con actualización de vouchers fallidos
+        if (wamid != null && !wamid.trim().isEmpty()) {
+            java.util.Optional<Mensaje> existenteOpt = mensajeRepository.findByWamid(wamid.trim());
+            if (existenteOpt.isPresent()) {
+                Mensaje msgExistente = existenteOpt.get();
+                boolean esVoucher = (contenido != null && (contenido.startsWith("[VOUCHER]") || contenido.startsWith("data:image/")));
+                boolean msgExistenteEsFallido = msgExistente.getContenido() != null && 
+                    (msgExistente.getContenido().contains("[VOUCHER_FALLIDO]") || msgExistente.getContenido().equals("[Archivo]"));
+
+                if (esVoucher && msgExistenteEsFallido) {
+                    System.out.println("[WhatsApp Deduplicador] Actualizando mensaje previo fallido " + wamid + " con voucher descargado exitosamente.");
+                    msgExistente.setContenido(contenido);
+                    mensajeRepository.save(msgExistente);
+
+                    Chat chatExistente = msgExistente.getChat();
+                    Pedido pedidoActivo = pedidoRepository.findTopByUsuarioTelefonoAndEstadoOrderByFechaDesc(telefono, "PENDIENTE");
+                    if (pedidoActivo == null) {
+                        pedidoActivo = pedidoRepository.findTopByUsuarioTelefonoAndEstadoOrderByFechaDesc(telefono, "EN REVISION");
+                    }
+
+                    if (chatExistente != null && pedidoActivo != null) {
+                        chatExistente.setPedidoReferenciadoId(pedidoActivo.getId());
+                        chatExistente.setUltimoMensaje(sanitizarUltimoMensaje(contenido));
+                        chatExistente.setFechaUltimaActualizacion(LocalDateTime.now());
+                        chatExistente.setSugerenciaIa("¡Muchas gracias por tu comprobante! 😊 Hemos recibido tu pago y se encuentra en validación. En breve confirmaremos tu pedido y coordinaremos el despacho.");
+                        chatExistente.setFasePedido("CONCILIACION");
+                        chatExistente.setDatosCompletos(true);
+                        chatExistente.setContextoInmediato(null);
+                        chatRepository.save(chatExistente);
+                    } else if (chatExistente != null) {
+                        chatExistente.setUltimoMensaje(sanitizarUltimoMensaje(contenido));
+                        chatExistente.setFechaUltimaActualizacion(LocalDateTime.now());
+                        chatRepository.save(chatExistente);
+                        System.out.println("[ChatService] [VOUCHER] recibido pero cliente " + telefono + " no tiene pedidos PENDIENTE ni EN REVISION. Se omite actualización de fase.");
+                    }
+
+                    if ("CLIENTE".equalsIgnoreCase(remitente) && pedidoActivo != null) {
+                        conciliacionVoucherService.procesarYConciliarVoucher(telefono, contenido, wamid);
+                    }
+                    return;
+                }
+
+                System.out.println("[WhatsApp Deduplicador] Mensaje duplicado omitido por wamid existente: " + wamid);
+                return;
+            }
+        }
+
         // 1. Intentar buscar por teléfono real
         Chat chat = chatRepository.findByTelefonoCliente(telefono).orElse(null);
 
@@ -133,7 +185,7 @@ public class ChatServiceImpl implements ChatService {
         }
 
         // Actualizar datos del chat
-        chat.setUltimoMensaje(contenido);
+        chat.setUltimoMensaje(sanitizarUltimoMensaje(contenido));
         chat.setFechaUltimaActualizacion(LocalDateTime.now());
         
         // Si el remitente es el administrador, ponemos a 0 los no leídos; si es cliente, sumamos 1
@@ -145,51 +197,87 @@ public class ChatServiceImpl implements ChatService {
         
         Chat chatGuardado = chatRepository.save(chat);
 
-        // Guardar burbuja de mensaje
-        Mensaje mensaje = new Mensaje();
-        mensaje.setChat(chatGuardado);
+        // Guardar o actualizar burbuja de mensaje
+        Mensaje mensaje = null;
+        if (wamid != null && !wamid.trim().isEmpty()) {
+            java.util.Optional<Mensaje> existente = mensajeRepository.findByWamid(wamid);
+            if (existente.isPresent()) {
+                mensaje = existente.get();
+            }
+        }
+        if (mensaje == null) {
+            mensaje = new Mensaje();
+            mensaje.setChat(chatGuardado);
+            mensaje.setRemitente(remitente);
+            mensaje.setFechaEnvio(LocalDateTime.now());
+            mensaje.setWamid(wamid);
+        }
         mensaje.setContenido(contenido);
-        mensaje.setRemitente(remitente);
-        mensaje.setFechaEnvio(LocalDateTime.now());
-        mensaje.setWamid(wamid);
         mensajeRepository.save(mensaje);
 
-        // Lanzar análisis asíncrono de OpenAI si el mensaje proviene del cliente
+        // Lanzar análisis asíncrono de OpenAI si el mensaje proviene del cliente y NO es un voucher/imagen
         if ("CLIENTE".equalsIgnoreCase(remitente)) {
-            try {
-                if (org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive()) {
-                    org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
-                        new org.springframework.transaction.support.TransactionSynchronization() {
-                            @Override
-                            public void afterCommit() {
-                                openAiService.procesarMensajeConIA(chatGuardado.getId(), telefono, contenido);
-                            }
-                        }
-                    );
-                } else {
-                    openAiService.procesarMensajeConIA(chatGuardado.getId(), telefono, contenido);
-                }
-            } catch (Exception e) {
-                System.err.println("[ChatService] Error lanzando procesamiento de OpenAI de forma asíncrona: " + e.getMessage());
-            }
+            boolean esVoucher = (contenido != null && (contenido.startsWith("[VOUCHER]") || contenido.startsWith("data:image/")));
+            boolean esVoucherFallido = (contenido != null && contenido.contains("[VOUCHER_FALLIDO]"));
 
-            // Lanzar conciliación asíncrona de voucher si es una imagen
-            if (contenido != null && contenido.startsWith("[VOUCHER]")) {
+            if (esVoucherFallido) {
+                // Manejo inteligente: No enviar a OpenAI como texto conversacional
+                chatGuardado.setSugerenciaIa("⚠️ El cliente intentó enviar un comprobante de pago pero ocurrió un error en la descarga de WhatsApp. Solicitar reenvío manual del comprobante.");
+                chatGuardado.setPrioridad("ALTA");
+                chatGuardado.setFasePedido("CONCILIACION");
+                chatRepository.save(chatGuardado);
+                System.out.println("[ChatService] [VOUCHER_FALLIDO] detectado para cliente " + telefono + ". Se actualizó el chat con aviso para el administrador.");
+            } else if (!esVoucher) {
                 try {
                     if (org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive()) {
                         org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
                             new org.springframework.transaction.support.TransactionSynchronization() {
                                 @Override
                                 public void afterCommit() {
-                                    conciliacionVoucherService.procesarYConciliarVoucher(telefono, contenido);
+                                    openAiService.procesarMensajeConIA(chatGuardado.getId(), telefono, contenido);
                                 }
                             }
                         );
                     } else {
-                        conciliacionVoucherService.procesarYConciliarVoucher(telefono, contenido);
+                        openAiService.procesarMensajeConIA(chatGuardado.getId(), telefono, contenido);
                     }
                 } catch (Exception e) {
-                    System.err.println("[ChatService] Error disparando conciliación OCR: " + e.getMessage());
+                    System.err.println("[ChatService] Error lanzando procesamiento de OpenAI de forma asíncrona: " + e.getMessage());
+                }
+            } else {
+                // Mensaje con comprobante detectado: solo vincular si existe un pedido PENDIENTE o EN REVISION activo
+                Pedido pedidoActivo = pedidoRepository.findTopByUsuarioTelefonoAndEstadoOrderByFechaDesc(telefono, "PENDIENTE");
+                if (pedidoActivo == null) {
+                    pedidoActivo = pedidoRepository.findTopByUsuarioTelefonoAndEstadoOrderByFechaDesc(telefono, "EN REVISION");
+                }
+
+                if (pedidoActivo != null) {
+                    chatGuardado.setPedidoReferenciadoId(pedidoActivo.getId());
+                    chatGuardado.setSugerenciaIa("¡Muchas gracias por tu comprobante! 😊 Hemos recibido tu pago y se encuentra en validación. En breve confirmaremos tu pedido y coordinaremos el despacho.");
+                    chatGuardado.setFasePedido("CONCILIACION");
+                    chatGuardado.setDatosCompletos(true);
+                    chatGuardado.setContextoInmediato(null);
+                    chatRepository.save(chatGuardado);
+                    System.out.println("[ChatService] [VOUCHER] asociado exitosamente al pedido ID " + pedidoActivo.getId() + " para cliente " + telefono + ".");
+
+                    try {
+                        if (org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive()) {
+                            org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                                new org.springframework.transaction.support.TransactionSynchronization() {
+                                    @Override
+                                    public void afterCommit() {
+                                        conciliacionVoucherService.procesarYConciliarVoucher(telefono, contenido, wamid);
+                                    }
+                                }
+                            );
+                        } else {
+                            conciliacionVoucherService.procesarYConciliarVoucher(telefono, contenido, wamid);
+                        }
+                    } catch (Exception e) {
+                        System.err.println("[ChatService] Error disparando conciliación OCR: " + e.getMessage());
+                    }
+                } else {
+                    System.out.println("[ChatService] [VOUCHER] detectado pero cliente " + telefono + " no tiene pedidos PENDIENTE ni EN REVISION. Se ignora voucher histórico.");
                 }
             }
         }
@@ -205,14 +293,23 @@ public class ChatServiceImpl implements ChatService {
         chatRepository.deleteById(chatId);
     }
 
-    // ── Mapeos manuales ──────────────────────────────────────────────────────
+    private String sanitizarUltimoMensaje(String msg) {
+        if (msg == null) return null;
+        if (msg.contains("[VOUCHER]") || msg.contains("data:image/")) {
+            return "📷 Foto";
+        }
+        if (msg.length() > 180) {
+            return msg.substring(0, 120) + "...";
+        }
+        return msg;
+    }
 
     private ChatDTO convertChatToDto(Chat chat) {
         ChatDTO dto = new ChatDTO();
         dto.setId(chat.getId());
         dto.setTelefonoCliente(chat.getTelefonoCliente());
         dto.setNombreCliente(chat.getNombreCliente());
-        dto.setUltimoMensaje(chat.getUltimoMensaje());
+        dto.setUltimoMensaje(sanitizarUltimoMensaje(chat.getUltimoMensaje()));
         dto.setFechaUltimaActualizacion(chat.getFechaUltimaActualizacion());
         dto.setUnreadCount(chat.getUnreadCount());
         dto.setPrioridad(chat.getPrioridad());
@@ -222,6 +319,7 @@ public class ChatServiceImpl implements ChatService {
         dto.setDireccionDetectada(chat.getDireccionDetectada());
         dto.setDatosCompletos(chat.getDatosCompletos());
         dto.setFasePedido(chat.getFasePedido());
+        dto.setContextoInmediato(chat.getContextoInmediato());
         return dto;
     }
 
@@ -240,7 +338,7 @@ public class ChatServiceImpl implements ChatService {
 
     @Override
     @Transactional
-    public void regenerarRespuestaIA(Long chatId) {
+    public com.upc.DTO.ChatDTO regenerarRespuestaIA(Long chatId) {
         Chat chat = chatRepository.findById(chatId).orElseThrow(() -> new RuntimeException("Chat no encontrado"));
         List<Mensaje> msgs = mensajeRepository.findTop10ByChatIdOrderByFechaEnvioDesc(chatId);
         String ultimoContenido = "";
@@ -250,6 +348,9 @@ public class ChatServiceImpl implements ChatService {
                 break;
             }
         }
-        openAiService.procesarMensajeConIA(chatId, chat.getTelefonoCliente(), ultimoContenido);
+        openAiService.generarSoloSugerenciaIA(chatId, chat.getTelefonoCliente(), ultimoContenido);
+        
+        Chat chatActualizado = chatRepository.findById(chatId).orElse(chat);
+        return convertChatToDto(chatActualizado);
     }
 }

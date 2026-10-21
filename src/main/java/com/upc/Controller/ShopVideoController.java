@@ -10,7 +10,7 @@ import java.util.List;
 
 @RestController
 @RequestMapping({"/api/v1/videos", "/api/videos"})
-@CrossOrigin(origins = "http://localhost:4200")
+@CrossOrigin(origins = {"http://localhost:4200", "https://puntoycoma-store.netlify.app", "https://puntoycoma-store.netlify.app/"})
 public class ShopVideoController {
 
     @Autowired
@@ -43,7 +43,7 @@ public class ShopVideoController {
         return new ResponseEntity<>(HttpStatus.NO_CONTENT);
     }
 
-    @CrossOrigin(origins = "http://localhost:4200")
+    @CrossOrigin(origins = {"http://localhost:4200", "https://puntoycoma-store.netlify.app", "https://puntoycoma-store.netlify.app/"})
     @PatchMapping("/{id}/visibilidad")
     public ResponseEntity<ShopVideoDTO> actualizarVisibilidad(
             @PathVariable Long id,
@@ -52,7 +52,7 @@ public class ShopVideoController {
         return new ResponseEntity<>(actualizado, HttpStatus.OK);
     }
 
-    @CrossOrigin(origins = "http://localhost:4200")
+    @CrossOrigin(origins = {"http://localhost:4200", "https://puntoycoma-store.netlify.app", "https://puntoycoma-store.netlify.app/"})
     @PutMapping("/{id}")
     public ResponseEntity<ShopVideoDTO> actualizarVideo(
             @PathVariable Long id,

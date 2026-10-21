@@ -32,4 +32,9 @@ public class InventarioMovimiento {
     @JoinColumn(name = "producto_id", nullable = false)
     @com.fasterxml.jackson.annotation.JsonIgnore
     private Producto producto;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "pedido_id")
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private Pedido pedido;
 }

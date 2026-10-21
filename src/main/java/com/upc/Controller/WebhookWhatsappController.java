@@ -26,7 +26,7 @@ import org.springframework.web.bind.annotation.*;
  */
 @RestController
 @RequestMapping({"/webhook", "/webhook/"})
-@CrossOrigin(origins = "http://localhost:4200")
+@CrossOrigin(origins = {"http://localhost:4200", "https://puntoycoma-store.netlify.app", "https://puntoycoma-store.netlify.app/"})
 public class WebhookWhatsappController {
 
     private static final Logger log = LoggerFactory.getLogger(WebhookWhatsappController.class);

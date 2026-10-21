@@ -24,10 +24,13 @@ public class Pedido {
     private Double total;
     private String estado;
 
+    @Column(name = "stock_descontado")
+    private Boolean stockDescontado = false;
+
     @Column(name = "metodo_pago")
     private String metodoPago;
 
-    @Column(name = "referencia_pago")
+    @Column(name = "referencia_pago", length = 2048)
     private String referenciaPago;
 
     @ManyToOne(fetch = FetchType.LAZY)
@@ -41,9 +44,10 @@ public class Pedido {
     private Double diferencia;
 
     @Column(name = "fecha_pago")
+    @com.fasterxml.jackson.annotation.JsonFormat(pattern = "dd MMM. yyyy - hh:mm a", locale = "es_PE", timezone = "America/Lima")
     private LocalDateTime fechaPago;
 
-    @Column(name = "voucher_url")
+    @Column(name = "voucher_url", length = 2048)
     private String voucherUrl;
 
     @Column(name = "banco_emisor")
@@ -52,8 +56,14 @@ public class Pedido {
     @Column(name = "resultado_conciliacion")
     private String resultadoConciliacion;
 
+    @Column(name = "estado_pago")
+    private String estadoPago; // "SIN_PAGO", "PAGO_PARCIAL", "SOLICITAR_FALTANTE", "PAGO_COMPLETO"
+
     @Column(name = "nombre_completo")
     private String nombreCompleto;
+
+    @Column(name = "dni")
+    private String dni;
 
     @Column(name = "direccion_entrega")
     private String direccionEntrega;
@@ -79,4 +89,20 @@ public class Pedido {
     public void setMontoOcr(Double montoOcr) {
         this.montoDetectado = montoOcr;
     }
+
+    public Boolean isStockDescontado() {
+        return Boolean.TRUE.equals(this.stockDescontado);
+    }
+
+    public String getValidacion() {
+        return this.resultadoConciliacion;
+    }
+
+    public void setValidacion(String validacion) {
+        this.resultadoConciliacion = validacion;
+    }
+
+    @OneToMany(mappedBy = "pedido", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private java.util.List<PagoVoucher> pagosVouchers = new java.util.ArrayList<>();
 }

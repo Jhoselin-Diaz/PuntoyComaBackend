@@ -56,5 +56,11 @@ public class Chat {
 
     @Column(name = "fase_pedido")
     private String fasePedido; // "INICIAL", "CONCILIACION", "RECLAMO_CONSULTA"
+
+    @Column(name = "contexto_inmediato")
+    private String contextoInmediato;
+
+    @Column(name = "fecha_corte")
+    private LocalDateTime fechaCorte;
 }
 

@@ -13,7 +13,7 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/admin/chats")
-@CrossOrigin(origins = "http://localhost:4200")
+@CrossOrigin(origins = {"http://localhost:4200", "https://puntoycoma-store.netlify.app", "https://puntoycoma-store.netlify.app/"})
 public class AdminChatController {
 
     @Autowired
@@ -60,10 +60,8 @@ public class AdminChatController {
     }
 
     @PostMapping("/{chatId}/regenerar-ia")
-    public ResponseEntity<Map<String, String>> regenerarRespuestaIA(@PathVariable Long chatId) {
-        chatService.regenerarRespuestaIA(chatId);
-        Map<String, String> response = new java.util.HashMap<>();
-        response.put("status", "procesando");
-        return new ResponseEntity<>(response, HttpStatus.OK);
+    public ResponseEntity<com.upc.DTO.ChatDTO> regenerarRespuestaIA(@PathVariable Long chatId) {
+        com.upc.DTO.ChatDTO chatDto = chatService.regenerarRespuestaIA(chatId);
+        return new ResponseEntity<>(chatDto, HttpStatus.OK);
     }
 }

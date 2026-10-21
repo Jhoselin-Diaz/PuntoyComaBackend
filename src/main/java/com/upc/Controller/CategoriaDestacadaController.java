@@ -10,7 +10,7 @@ import java.util.List;
 
 @RestController
 @RequestMapping({"/api/v1/categorias-destacadas", "/api/categorias-destacadas"})
-@CrossOrigin(origins = "http://localhost:4200")
+@CrossOrigin(origins = {"http://localhost:4200", "https://puntoycoma-store.netlify.app", "https://puntoycoma-store.netlify.app/"})
 public class CategoriaDestacadaController {
 
     @Autowired
