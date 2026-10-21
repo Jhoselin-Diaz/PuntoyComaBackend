@@ -1,1 +1,25 @@
+name: Compilar y Subir Puente WhatsApp a Azure ACR
 
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar codigo del repositorio
+        uses: actions/checkout@v4
+
+      - name: Iniciar sesion en Azure Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: crpuntoycoma.azurecr.io
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Construir y subir imagen Docker
+        run: |
+          docker build -t crpuntoycoma.azurecr.io/puente-whatsapp:v1 ./puente-whatsapp
+          docker push crpuntoycoma.azurecr.io/puente-whatsapp:v1
