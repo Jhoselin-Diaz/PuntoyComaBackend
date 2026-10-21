@@ -2,6 +2,7 @@ const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcodeTerminal = require('qrcode-terminal');
 const axios = require('axios');
 const express = require('express');
+const cors = require('cors'); // <-- 1. IMPORTAR CORS
 
 let QRCode = null;
 try {
@@ -10,8 +11,9 @@ try {
     console.warn('⚠️ Módulo "qrcode" no disponible. Ejecuta npm install en puente-whatsapp para generar Base64 de QR.');
 }
 
-const BACKEND_URL = 'http://localhost:8080/webhook';
-const PORT = 3001;
+// 2. Variables dinámicas para Azure y entorno local
+const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:8080/webhook';
+const PORT = process.env.PORT || 3001;
 
 // Estado global en memoria para consulta del backend/frontend
 let currentStatus = 'DISCONNECTED'; // Estados: 'DISCONNECTED', 'CONNECTING', 'QR_READY', 'CONNECTED'
