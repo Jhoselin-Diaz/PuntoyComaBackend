@@ -2,7 +2,7 @@ const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcodeTerminal = require('qrcode-terminal');
 const axios = require('axios');
 const express = require('express');
-const cors = require('cors'); // <-- 1. IMPORTAR CORS
+const cors = require('cors');
 
 let QRCode = null;
 try {
@@ -11,7 +11,6 @@ try {
     console.warn('⚠️ Módulo "qrcode" no disponible. Ejecuta npm install en puente-whatsapp para generar Base64 de QR.');
 }
 
-// 2. Variables dinámicas para Azure y entorno local
 const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:8080/webhook';
 const PORT = process.env.PORT || 3001;
 
@@ -88,7 +87,6 @@ async function descargarDirectoConPuppeteer(clientInstance, msg) {
 
             if (!target) return { error: `Mensaje ${id} no encontrado en WAWebCollections.Msg` };
 
-            // Forzar resolución de mediaData en WhatsApp Web
             if (typeof target.downloadMedia === 'function') {
                 try {
                     await target.downloadMedia({ downloadEvenIfExpensive: true, rmrReason: 1 });
@@ -108,8 +106,6 @@ async function descargarDirectoConPuppeteer(clientInstance, msg) {
             let decryptedMedia = null;
             let lastErr = null;
 
-            // En WhatsApp PC / Web, Meta CDN retorna Content-Type: application/octet-stream.
-            // Para evitar InvalidMediaFileType, intentar con type: 'document' primero, y fallback a target.type.
             try {
                 decryptedMedia = await downloadManager.downloadAndMaybeDecrypt({
                     directPath: target.directPath,
@@ -201,8 +197,6 @@ async function descargarMediaConReintento(msg, maxIntentos = 4) {
     }
     console.log('=====================================================');
 
-    // Pausa inicial de 2.0 segundos antes del primer intento de descarga
-    // Permite que Puppeteer y el cliente Web sincronicen el archivo y descifren tokens con el CDN de WhatsApp
     if (msg.hasMedia || msg.type === 'image' || msg.type === 'document') {
         console.log(`⏳ [Media Pre-descarga] Pausa inicial de 2.0s para sincronización de tokens/CDN de WhatsApp...`);
         await new Promise(resolve => setTimeout(resolve, 2000));
@@ -216,7 +210,6 @@ async function descargarMediaConReintento(msg, maxIntentos = 4) {
                 console.warn(`⚠️ [Media] Advertencia: El cliente de WhatsApp Web no está en estado CONNECTED (Estado actual: ${currentStatus}).`);
             }
 
-            // Re-obtener el mensaje actualizado directamente de la sesión de WhatsApp Web en cada intento
             let targetMsg = msg;
             try {
                 if (client && typeof client.getMessageById === 'function') {
@@ -241,7 +234,6 @@ async function descargarMediaConReintento(msg, maxIntentos = 4) {
                 console.warn(`⚠️ [Media] targetMsg.downloadMedia() falló (${errDownload?.message || errDownload}). Ejecutando bypass directo vía WAWebDownloadManager...`);
             }
 
-            // Si downloadMedia devolvió nulo o lanzó error, ejecutar bypass con Puppeteer
             if (!media || !media.data) {
                 try {
                     const directResult = await descargarDirectoConPuppeteer(client, targetMsg);
@@ -278,15 +270,28 @@ async function descargarMediaConReintento(msg, maxIntentos = 4) {
     return null;
 }
 
-// Inicializar Express para recibir comandos de envío de Spring Boot y responder estado
+// Inicializar Express
 const app = express();
+app.use(cors()); // Habilita peticiones cruzadas desde Angular
 app.use(express.json());
 
 // Endpoint para consultar el estado actual de WhatsApp Web y obtener el QR si existe
 app.get('/status', (req, res) => {
     return res.status(200).json({
         status: currentStatus,
-        qrCodeBase64: qrCodeBase64
+        conectado: currentStatus === 'CONNECTED',
+        qrCodeBase64: qrCodeBase64,
+        qr: qrCodeBase64
+    });
+});
+
+// Endpoint duplicado/alias por si Angular consulta /api/whatsapp/estado
+app.get('/api/whatsapp/estado', (req, res) => {
+    return res.status(200).json({
+        status: currentStatus,
+        conectado: currentStatus === 'CONNECTED',
+        qrCodeBase64: qrCodeBase64,
+        qr: qrCodeBase64
     });
 });
 
@@ -324,7 +329,6 @@ app.get('/diag/:id', async (req, res) => {
                     mediaDataKeys: target.mediaData ? Object.keys(target.mediaData) : []
                 };
 
-                // Test downloadMedia
                 let nativeDlResult = null;
                 try {
                     if (typeof target.downloadMedia === 'function') {
@@ -344,7 +348,6 @@ app.get('/diag/:id', async (req, res) => {
                 info.nativeDl = nativeDlResult;
                 info.mediaStageAfterNative = target.mediaData?.mediaStage;
 
-                // Test downloadAndMaybeDecrypt with type: 'image' vs type: 'document'
                 let decryptResult = null;
                 try {
                     const downloadManager = window.require('WAWebDownloadManager')?.downloadManager;
@@ -353,7 +356,6 @@ app.get('/diag/:id', async (req, res) => {
                             addAnnotations: () => mockQpl,
                             addPoint: () => mockQpl
                         };
-                        // Try with type: 'document' if image fails
                         let decryptedMedia = null;
                         try {
                             decryptedMedia = await downloadManager.downloadAndMaybeDecrypt({
@@ -385,7 +387,6 @@ app.get('/diag/:id', async (req, res) => {
                 }
                 info.decryptResult = decryptResult;
 
-                // Inspect mediaData values
                 const mdVals = {};
                 if (target.mediaData) {
                     for (const k of Object.keys(target.mediaData)) {
@@ -401,7 +402,6 @@ app.get('/diag/:id', async (req, res) => {
                 }
                 info.mediaDataValues = mdVals;
 
-                // Check __x_mediaBlob
                 const mb = target.mediaData?.__x_mediaBlob || target.mediaData?.mediaBlob;
                 if (mb) {
                     try {
@@ -429,7 +429,7 @@ app.get('/diag/:id', async (req, res) => {
     }
 });
 
-// Endpoint de salida compatible con la firma de Evolution API que usa Spring Boot
+// Endpoint de salida compatible con Spring Boot
 app.post('/message/sendText/:instance', async (req, res) => {
     try {
         const { number, textMessage } = req.body;
@@ -439,7 +439,6 @@ app.post('/message/sendText/:instance', async (req, res) => {
             return res.status(400).json({ error: 'Número y texto son requeridos' });
         }
 
-        // Formatear el JID dinámicamente según sea LID (15 dígitos) o cuenta estándar (@c.us)
         let jid = number;
         if (!jid.includes('@')) {
             const numClean = number.replace(/[^0-9]/g, '');
@@ -464,10 +463,8 @@ app.post('/message/sendText/:instance', async (req, res) => {
             return res.status(503).json({ error: 'El cliente de WhatsApp Web no está inicializado.' });
         }
 
-        // Enviar mensaje
         const sentMsg = await client.sendMessage(jid, text);
 
-        // Retornar formato de respuesta que Spring Boot espera
         return res.status(200).json({
             key: {
                 id: sentMsg.id.id,
@@ -486,7 +483,7 @@ app.post('/message/sendText/:instance', async (req, res) => {
     }
 });
 
-// Endpoint de soporte para redescargar media de un mensaje por ID y reenviar webhook a Spring Boot
+// Endpoint de soporte para redescargar media
 app.all('/message/redownload/:msgId', async (req, res) => {
     try {
         const msgId = req.params.msgId;
@@ -542,17 +539,17 @@ app.all('/message/redownload/:msgId', async (req, res) => {
 
 app.listen(PORT, () => {
     console.log('=====================================================');
-    console.log(`🌐 Servidor del puente escuchando en http://localhost:${PORT}`);
+    console.log(`🌐 Servidor del puente escuchando en puerto ${PORT}`);
     console.log('=====================================================');
 });
 
-// Manejadores globales para evitar caídas abruptas del proceso por Puppeteer o micro-cortes
+// Manejadores globales
 process.on('unhandledRejection', (reason, promise) => {
-    console.warn('⚠️ [Advertencia Global] Rejection no manejada detectada en el puente (no se detendrá el proceso):', reason);
+    console.warn('⚠️ [Advertencia Global] Rejection no manejada detectada en el puente:', reason);
 });
 
 process.on('uncaughtException', (err, origin) => {
-    console.warn('⚠️ [Advertencia Global] Excepción no capturada detectada en el puente (no se detendrá el proceso):', err.message || err);
+    console.warn('⚠️ [Advertencia Global] Excepción no capturada detectada en el puente:', err.message || err);
 });
 
 function inicializarCliente() {
@@ -565,12 +562,12 @@ function inicializarCliente() {
 
     client = new Client({
         authStrategy: new LocalAuth(),
-        webVersionCache: {
-            type: 'remote',
-            remotePath: 'https://raw.githubusercontent.com/wwebjs/web-dapi-cached/main/latest.html'
-        },
+        authTimeoutMs: 180000, // 3 minutos para permitir que Azure sincronice sin abortar
+        takeoverOnConflict: true,
+        takeoverTimeoutMs: 15000,
         puppeteer: {
             headless: true,
+            timeout: 120000,
             args: [
                 '--no-sandbox', 
                 '--disable-setuid-sandbox',
@@ -578,12 +575,16 @@ function inicializarCliente() {
                 '--disable-accelerated-2d-canvas',
                 '--no-first-run',
                 '--no-zygote',
-                '--disable-gpu'
+                '--disable-gpu',
+                '--disable-extensions',
+                '--disable-software-rasterizer',
+                '--disable-default-apps',
+                '--mute-audio',
+                '--disable-background-networking'
             ]
         }
     });
 
-    // Eventos de estado para diagnóstico visible en la terminal
     client.on('loading_screen', (percent, message) => {
         currentStatus = 'CONNECTING';
         console.log(`⏳ [Cargando] ${percent}% - ${message}`);
@@ -596,7 +597,6 @@ function inicializarCliente() {
         qrcodeTerminal.generate(qr, { small: true });
         console.log('=====================================================');
 
-        // Convertir QR a formato Base64 (data:image/png;base64,...)
         if (QRCode) {
             try {
                 qrCodeBase64 = await QRCode.toDataURL(qr);
@@ -630,35 +630,26 @@ function inicializarCliente() {
         }
     });
 
-    // Capturar todos los mensajes creados (tanto entrantes como salientes)
     client.on('message_create', async (msg) => {
         try {
             const rawMsgId = msg.id?.id || 'null';
-            // LOG ABSOLUTO E INMEDIATO: Captura todos los eventos creados antes de filtrar
             console.log(`📥 [Mensaje Creado/Detectado] ID: ${rawMsgId} | from: ${msg.from} | to: ${msg.to} | De mí: ${msg.fromMe} | Cuerpo: "${msg.body || '(sin texto)'}"`);
 
-            // Deduplicación temprana en Node por ID de mensaje de WhatsApp
             if (msg.id?.id && isDuplicateMsg(msg.id.id)) {
                 console.log(`ℹ️ [Filtro Node] Mensaje con ID ${msg.id.id} ya procesado recientemente. Omitiendo webhook duplicado.`);
                 return;
             }
 
-            // Identificar el socio del chat (el número del cliente en chats individuales)
             const remoteJid = msg.fromMe ? msg.to : msg.from;
 
-            // Filtrar y omitir chats grupales o estados (permitir @c.us y @lid)
             if (!remoteJid || (!remoteJid.endsWith('@c.us') && !remoteJid.endsWith('@lid'))) {
                 console.log(`ℹ️ [Filtro] Mensaje ignorado por no pertenecer a un chat individual (@c.us o @lid). JID: ${remoteJid}`);
                 return;
             }
 
-            // Traducir el JID si es de tipo @lid para enviarlo como número telefónico real (@c.us)
             const finalJid = await resolverJidTelefono(remoteJid);
-
-            // LOG CON EL JID FINAL RESOLVIDO
             console.log(`📥 [Mensaje Detectado] ID: ${msg.id.id} | De mí: ${msg.fromMe} | JID Destino: ${finalJid}`);
 
-            // Obtener el nombre del perfil de manera no bloqueante.
             let pushName = 'Cliente WhatsApp';
             try {
                 if (msg._data && msg._data.notifyName) {
@@ -675,7 +666,6 @@ function inicializarCliente() {
                 console.warn('⚠️ No se pudo recuperar el nombre del contacto, usando por defecto:', errContact.message);
             }
 
-            // Estructurar el texto de la conversación de forma robusta y simplificada
             let conversationText = msg.body || '';
 
             if (msg.hasMedia || msg.type === 'image' || msg.type === 'document' || msg.type === 'audio' || msg.type === 'ptt') {
@@ -685,7 +675,6 @@ function inicializarCliente() {
                         const mime = (media.mimetype || 'image/jpeg').toLowerCase();
                         const filename = (media.filename || '').toLowerCase();
                         
-                        // Soporte para imágenes enviadas como foto directa o como documento (.jpg, .jpeg, .png, .webp)
                         const isImageMime = mime.startsWith('image/');
                         const isImageExt = filename.endsWith('.jpg') || filename.endsWith('.jpeg') || filename.endsWith('.png') || filename.endsWith('.webp');
                         const isImageOrVoucherDoc = isImageMime || msg.type === 'image' || isImageExt;
@@ -706,7 +695,6 @@ function inicializarCliente() {
                             }
                         }
                     } else {
-                        // Fallback cuando la descarga no pudo obtener los bytes
                         const rawId = msg.id?.id || 'desconocido';
                         const isPotentialVoucher = msg.type === 'image' || msg.type === 'document' || msg.hasMedia;
                         if (isPotentialVoucher && msg.type !== 'audio' && msg.type !== 'ptt') {
@@ -731,7 +719,6 @@ function inicializarCliente() {
                 }
             }
 
-            // Estructurar el payload simulando la estructura del webhook de Evolution API
             const payload = {
                 event: 'messages.upsert',
                 instance: 'LocalBridge',
@@ -742,7 +729,7 @@ function inicializarCliente() {
                         id: msg.id.id
                     },
                     pushName: pushName,
-                    lid: remoteJid.split('@')[0], // Pasar el LID original para unificar e impedir duplicaciones
+                    lid: remoteJid.split('@')[0],
                     message: {
                         conversation: conversationText
                     },
@@ -751,7 +738,6 @@ function inicializarCliente() {
                 }
             };
 
-            // Log del payload abreviado para no inundar el terminal
             const logPayload = JSON.parse(JSON.stringify(payload));
             if (logPayload.data && logPayload.data.message && logPayload.data.message.conversation) {
                 if (logPayload.data.message.conversation.startsWith('[VOUCHER] data:')) {
@@ -760,7 +746,6 @@ function inicializarCliente() {
             }
             console.log('📤 Enviando payload al backend:', JSON.stringify(logPayload, null, 2));
 
-            // Enviar POST a Spring Boot forzando codificación UTF-8
             axios.post(BACKEND_URL, payload, {
                 headers: {
                     'Content-Type': 'application/json; charset=utf-8',
@@ -787,7 +772,6 @@ function inicializarCliente() {
         }
     });
 
-    // Control de fallas de autenticación
     client.on('auth_failure', (msg) => {
         currentStatus = 'DISCONNECTED';
         qrCodeBase64 = null;
@@ -795,7 +779,6 @@ function inicializarCliente() {
         rebotarConexion();
     });
 
-    // Control de desconexión
     client.on('disconnected', (reason) => {
         currentStatus = 'DISCONNECTED';
         qrCodeBase64 = null;
