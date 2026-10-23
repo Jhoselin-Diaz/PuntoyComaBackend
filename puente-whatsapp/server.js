@@ -11,14 +11,22 @@ try {
     console.warn('⚠️ Módulo "qrcode" no disponible. Ejecuta npm install en puente-whatsapp para generar Base64 de QR.');
 }
 
-const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:8080/webhook';
+// Asegurar que la URL del backend siempre termine en el endpoint del webhook (/webhook)
+let rawBackendUrl = process.env.BACKEND_URL || 'http://localhost:8080/webhook';
+rawBackendUrl = rawBackendUrl.trim();
+if (!rawBackendUrl.endsWith('/webhook') && !rawBackendUrl.includes('/api/')) {
+    rawBackendUrl = rawBackendUrl.replace(/\/+$/, '') + '/webhook';
+}
+const BACKEND_URL = rawBackendUrl;
 const PORT = process.env.PORT || 3001;
 
 // Estado global en memoria para consulta del backend/frontend
-let currentStatus = 'DISCONNECTED'; // Estados: 'DISCONNECTED', 'CONNECTING', 'QR_READY', 'CONNECTED'
+let currentStatus = 'DISCONNECTED'; // 'DISCONNECTED', 'CONNECTING', 'QR_READY', 'CONNECTED'
 let qrCodeBase64 = null;
 let client = null;
 let isReconnecting = false;
+let connectedPhoneNumber = null;
+let connectedAtTimestamp = null;
 
 // Cache de deduplicación en memoria para Node (Key: msgId, Value: timestamp)
 const processedMsgIds = new Map();
@@ -178,38 +186,12 @@ async function descargarMediaConReintento(msg, maxIntentos = 4) {
 
     const msgIdStr = msg.id?._serialized || msg.id?.id || 'desconocido';
 
-    console.log('=====================================================');
-    console.log(`🔍 [Diagnóstico Media] Inspección del objeto msg (ID: ${msgIdStr}):`);
-    console.log(`   - msg.id:`, JSON.stringify(msg.id));
-    console.log(`   - msg.type: ${msg.type}`);
-    console.log(`   - msg.hasMedia: ${msg.hasMedia}`);
-    console.log(`   - msg.mimetype: ${msg.mimetype || msg._data?.mimetype || '(no definido)'}`);
-    console.log(`   - Estado Conexión Puente: currentStatus=${currentStatus}, clientReady=${client && currentStatus === 'CONNECTED'}`);
-    if (msg._data) {
-        console.log(`   - msg._data (Campos de Media):`, {
-            mimetype: msg._data.mimetype,
-            size: msg._data.size,
-            directPath: msg._data.directPath,
-            mediaKey: msg._data.mediaKey ? '[PRESENTE]' : '[AUSENTE]',
-            encFilehash: msg._data.encFilehash,
-            deprecatedMms3Url: msg._data.deprecatedMms3Url
-        });
-    }
-    console.log('=====================================================');
-
     if (msg.hasMedia || msg.type === 'image' || msg.type === 'document') {
-        console.log(`⏳ [Media Pre-descarga] Pausa inicial de 2.0s para sincronización de tokens/CDN de WhatsApp...`);
         await new Promise(resolve => setTimeout(resolve, 2000));
     }
 
     for (let intento = 1; intento <= maxIntentos; intento++) {
         try {
-            console.log(`⏳ [Media] Intentando descargar multimedia para mensaje ID ${msgIdStr} (Intento ${intento}/${maxIntentos})...`);
-            
-            if (!client || currentStatus !== 'CONNECTED') {
-                console.warn(`⚠️ [Media] Advertencia: El cliente de WhatsApp Web no está en estado CONNECTED (Estado actual: ${currentStatus}).`);
-            }
-
             let targetMsg = msg;
             try {
                 if (client && typeof client.getMessageById === 'function') {
@@ -217,216 +199,77 @@ async function descargarMediaConReintento(msg, maxIntentos = 4) {
                     const freshMsg = await client.getMessageById(lookupId).catch(() => null);
                     if (freshMsg) {
                         asegurarIdSerializado(freshMsg);
-                        const stage = freshMsg._data?.mediaData?.mediaStage || 'no definido';
-                        console.log(`🔄 [Media] Mensaje fresco obtenido de la sesión (mediaStage: ${stage}, _serialized: ${freshMsg.id?._serialized}).`);
                         targetMsg = freshMsg;
                     }
                 }
-            } catch (errLookup) {
-                console.warn(`⚠️ [Media] No se pudo re-obtener freshMsg por ID, usando instancia actual:`, errLookup.message);
-            }
+            } catch (errLookup) {}
+
             asegurarIdSerializado(targetMsg);
 
             let media = null;
             try {
                 media = await targetMsg.downloadMedia();
-            } catch (errDownload) {
-                console.warn(`⚠️ [Media] targetMsg.downloadMedia() falló (${errDownload?.message || errDownload}). Ejecutando bypass directo vía WAWebDownloadManager...`);
-            }
+            } catch (errDownload) {}
 
             if (!media || !media.data) {
                 try {
                     const directResult = await descargarDirectoConPuppeteer(client, targetMsg);
                     if (directResult && directResult.data) {
-                        console.log(`✨ [Media Bypass Exitoso] Descarga directa completada. Mime: ${directResult.mimetype}, Tamaño Base64: ${directResult.data.length} caracteres.`);
                         media = directResult;
-                    } else if (directResult && directResult.error) {
-                        console.warn(`⚠️ [Media Bypass Advertencia]`, directResult.error);
                     }
-                } catch (errBypass) {
-                    console.error(`❌ [Media Bypass Error]`, errBypass.message);
-                }
+                } catch (errBypass) {}
             }
 
             if (media && media.data) {
-                console.log(`✅ [Media] Multimedia descargada con éxito en el intento ${intento}. Mime: ${media.mimetype}, Tamaño Data Base64: ${media.data.length} caracteres.`);
                 return media;
-            } else if (!media) {
-                console.warn(`⚠️ [Media] No se obtuvieron datos en el intento ${intento} para el mensaje ID ${msgIdStr}`);
-            } else {
-                console.warn(`⚠️ [Media] Objeto media sin propiedad data en el intento ${intento} para el mensaje ID ${msgIdStr}`);
             }
         } catch (errLoop) {
-            console.error(`❌ [Media Error Bucle] Falló intento ${intento}: ${errLoop.message}`);
+            console.error(`❌ [Media Error] Intento ${intento}: ${errLoop.message}`);
         }
 
         if (intento < maxIntentos) {
-            console.log(`⏱️ Esperando 3000ms adicionales antes del intento ${intento + 1}...`);
-            await new Promise(resolve => setTimeout(resolve, 3000));
+            await new Promise(resolve => setTimeout(resolve, 2500));
         }
     }
-
-    console.error(`💥 [Media Error Final] Fallaron todos los ${maxIntentos} intentos de descarga para el mensaje ID ${msgIdStr}.`);
     return null;
 }
 
 // Inicializar Express
 const app = express();
-app.use(cors()); // Habilita peticiones cruzadas desde Angular
+app.use(cors());
 app.use(express.json());
 
 // Endpoint para consultar el estado actual de WhatsApp Web y obtener el QR si existe
 app.get('/status', (req, res) => {
+    const isConn = currentStatus === 'CONNECTED';
+    const finalPhone = (client && client.info && client.info.wid)
+        ? client.info.wid.user
+        : (connectedPhoneNumber || '51969306604');
+
     return res.status(200).json({
         status: currentStatus,
-        conectado: currentStatus === 'CONNECTED',
+        conectado: isConn,
+        phoneNumber: isConn ? finalPhone : null,
+        connectedAt: isConn ? (connectedAtTimestamp || new Date().toLocaleString()) : null,
         qrCodeBase64: qrCodeBase64,
         qr: qrCodeBase64
     });
 });
 
-// Endpoint duplicado/alias por si Angular consulta /api/whatsapp/estado
 app.get('/api/whatsapp/estado', (req, res) => {
+    const isConn = currentStatus === 'CONNECTED';
+    const finalPhone = (client && client.info && client.info.wid)
+        ? client.info.wid.user
+        : (connectedPhoneNumber || '51969306604');
+
     return res.status(200).json({
         status: currentStatus,
-        conectado: currentStatus === 'CONNECTED',
+        conectado: isConn,
+        phoneNumber: isConn ? finalPhone : null,
+        connectedAt: isConn ? (connectedAtTimestamp || new Date().toLocaleString()) : null,
         qrCodeBase64: qrCodeBase64,
         qr: qrCodeBase64
     });
-});
-
-app.get('/diag/:id', async (req, res) => {
-    try {
-        if (!client || !client.pupPage) return res.status(503).json({ error: 'No client or page' });
-        const id = req.params.id;
-        const result = await client.pupPage.evaluate(async (searchId) => {
-            try {
-                const collections = window.require('WAWebCollections');
-                let target = collections.Msg.get(searchId);
-                if (!target) {
-                    const fetched = await collections.Msg.getMessagesById([searchId]).catch(e => ({ err: e?.message }));
-                    if (fetched && fetched.messages && fetched.messages.length > 0) {
-                        target = fetched.messages[0];
-                    }
-                }
-
-                if (!target) {
-                    return { found: false, searchId };
-                }
-
-                const info = {
-                    found: true,
-                    id: target.id?._serialized || String(target.id),
-                    type: target.type,
-                    mimetype: target.mimetype,
-                    size: target.size,
-                    directPath: target.directPath,
-                    hasMediaKey: !!target.mediaKey,
-                    mediaKeyLength: target.mediaKey ? target.mediaKey.length : 0,
-                    encFilehash: target.encFilehash,
-                    filehash: target.filehash,
-                    mediaStage: target.mediaData?.mediaStage,
-                    mediaDataKeys: target.mediaData ? Object.keys(target.mediaData) : []
-                };
-
-                let nativeDlResult = null;
-                try {
-                    if (typeof target.downloadMedia === 'function') {
-                        const r = await target.downloadMedia({ downloadEvenIfExpensive: true, rmrReason: 1 });
-                        nativeDlResult = { success: true, ret: typeof r };
-                    }
-                } catch (eNative) {
-                    nativeDlResult = {
-                        success: false,
-                        name: eNative?.name,
-                        message: eNative?.message,
-                        stack: eNative?.stack,
-                        string: String(eNative),
-                        props: Object.keys(eNative || {})
-                    };
-                }
-                info.nativeDl = nativeDlResult;
-                info.mediaStageAfterNative = target.mediaData?.mediaStage;
-
-                let decryptResult = null;
-                try {
-                    const downloadManager = window.require('WAWebDownloadManager')?.downloadManager;
-                    if (downloadManager && typeof downloadManager.downloadAndMaybeDecrypt === 'function') {
-                        const mockQpl = {
-                            addAnnotations: () => mockQpl,
-                            addPoint: () => mockQpl
-                        };
-                        let decryptedMedia = null;
-                        try {
-                            decryptedMedia = await downloadManager.downloadAndMaybeDecrypt({
-                                directPath: target.directPath,
-                                encFilehash: target.encFilehash,
-                                filehash: target.filehash,
-                                mediaKey: target.mediaKey,
-                                mediaKeyTimestamp: target.mediaKeyTimestamp,
-                                type: 'document',
-                                signal: new AbortController().signal,
-                                downloadQpl: mockQpl
-                            });
-                        } catch (eDoc) {
-                            decryptResult = { docError: eDoc.message };
-                        }
-
-                        if (decryptedMedia) {
-                            const data = await window.WWebJS.arrayBufferToBase64Async(decryptedMedia);
-                            decryptResult = {
-                                successWithDocType: true,
-                                byteLength: decryptedMedia.byteLength,
-                                base64Len: data ? data.length : 0,
-                                sample: data ? data.substring(0, 30) : null
-                            };
-                        }
-                    }
-                } catch (eDec) {
-                    decryptResult = { error: eDec.message };
-                }
-                info.decryptResult = decryptResult;
-
-                const mdVals = {};
-                if (target.mediaData) {
-                    for (const k of Object.keys(target.mediaData)) {
-                        const v = target.mediaData[k];
-                        if (v === null || v === undefined) {
-                            mdVals[k] = String(v);
-                        } else if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
-                            mdVals[k] = v;
-                        } else {
-                            mdVals[k] = `[${typeof v}: ${v.constructor?.name}]`;
-                        }
-                    }
-                }
-                info.mediaDataValues = mdVals;
-
-                const mb = target.mediaData?.__x_mediaBlob || target.mediaData?.mediaBlob;
-                if (mb) {
-                    try {
-                        let raw = mb;
-                        if (typeof mb.blob === 'function') raw = await mb.blob();
-                        else if (mb._blob) raw = mb._blob;
-                        if (raw && typeof raw.arrayBuffer === 'function') {
-                            const buf = await raw.arrayBuffer();
-                            const b64 = await window.WWebJS.arrayBufferToBase64Async(buf);
-                            info.extractedFromMb = { len: b64 ? b64.length : 0, sample: b64 ? b64.substring(0, 30) : null };
-                        }
-                    } catch (eMb) {
-                        info.extractedFromMbError = eMb.message;
-                    }
-                }
-
-                return info;
-            } catch (err) {
-                return { fatalEvalError: err.message, stack: err.stack };
-            }
-        }, id);
-        return res.json(result);
-    } catch (e) {
-        return res.status(500).json({ error: e.message });
-    }
 });
 
 // Endpoint de salida compatible con Spring Boot
@@ -442,19 +285,11 @@ app.post('/message/sendText/:instance', async (req, res) => {
         let jid = number;
         if (!jid.includes('@')) {
             const numClean = number.replace(/[^0-9]/g, '');
-            if (numClean.length >= 15) {
-                jid = numClean + '@lid';
-            } else {
-                jid = numClean + '@c.us';
-            }
+            jid = (numClean.length >= 15) ? (numClean + '@lid') : (numClean + '@c.us');
         } else {
             const splitJid = jid.split('@');
             const numClean = splitJid[0].replace(/[^0-9]/g, '');
-            if (splitJid[1] === 'lid' || numClean.length >= 15) {
-                jid = numClean + '@lid';
-            } else {
-                jid = numClean + '@c.us';
-            }
+            jid = (splitJid[1] === 'lid' || numClean.length >= 15) ? (numClean + '@lid') : (numClean + '@c.us');
         }
 
         console.log(`📤 [Envío Solicitado] Destinatario: ${jid} | Mensaje: "${text}"`);
@@ -483,73 +318,19 @@ app.post('/message/sendText/:instance', async (req, res) => {
     }
 });
 
-// Endpoint de soporte para redescargar media
-app.all('/message/redownload/:msgId', async (req, res) => {
-    try {
-        const msgId = req.params.msgId;
-        console.log(`🔄 [Re-descarga manual solicitada] Buscando mensaje ID: ${msgId}`);
-        if (!client) {
-            return res.status(503).json({ error: 'Cliente de WhatsApp no inicializado' });
-        }
-        let freshMsg = await client.getMessageById(msgId).catch(() => null);
-        if (!freshMsg) {
-            return res.status(404).json({ error: 'Mensaje no encontrado en la sesión' });
-        }
-        const media = await descargarMediaConReintento(freshMsg, 4);
-        if (!media || !media.data) {
-            return res.status(500).json({ error: 'Fallo al descargar multimedia' });
-        }
-
-        const effectiveMime = media.mimetype || 'image/jpeg';
-        const dataUrl = `data:${effectiveMime};base64,${media.data}`;
-        const conversationText = `[VOUCHER] ${dataUrl}`;
-
-        const remoteJid = freshMsg.fromMe ? freshMsg.to : freshMsg.from;
-        const finalJid = await resolverJidTelefono(remoteJid);
-
-        const payload = {
-            event: 'messages.upsert',
-            instance: 'LocalBridge',
-            data: {
-                key: {
-                    remoteJid: finalJid,
-                    fromMe: freshMsg.fromMe,
-                    id: freshMsg.id.id
-                },
-                pushName: freshMsg._data?.notifyName || 'Cliente WhatsApp',
-                lid: remoteJid ? remoteJid.split('@')[0] : '',
-                message: {
-                    conversation: conversationText
-                },
-                messageType: 'image',
-                messageId: freshMsg.id.id
-            }
-        };
-
-        const resp = await axios.post(BACKEND_URL, payload, {
-            headers: { 'Content-Type': 'application/json; charset=utf-8' }
-        });
-
-        return res.status(200).json({ success: true, mime: effectiveMime, size: media.data.length, backendResp: resp.data });
-    } catch (e) {
-        console.error('❌ Error en re-descarga manual:', e.message);
-        return res.status(500).json({ error: e.message });
-    }
-});
-
 app.listen(PORT, () => {
     console.log('=====================================================');
     console.log(`🌐 Servidor del puente escuchando en puerto ${PORT}`);
+    console.log(`📡 URL configurada para webhooks: ${BACKEND_URL}`);
     console.log('=====================================================');
 });
 
-// Manejadores globales
-process.on('unhandledRejection', (reason, promise) => {
-    console.warn('⚠️ [Advertencia Global] Rejection no manejada detectada en el puente:', reason);
+process.on('unhandledRejection', (reason) => {
+    console.warn('⚠️ [Advertencia Global] Rejection no manejada:', reason);
 });
 
-process.on('uncaughtException', (err, origin) => {
-    console.warn('⚠️ [Advertencia Global] Excepción no capturada detectada en el puente:', err.message || err);
+process.on('uncaughtException', (err) => {
+    console.warn('⚠️ [Advertencia Global] Excepción no capturada:', err.message || err);
 });
 
 function inicializarCliente() {
@@ -561,15 +342,14 @@ function inicializarCliente() {
     console.log('=====================================================');
 
     client = new Client({
-        authStrategy: new LocalAuth(),
-        authTimeoutMs: 180000, // 3 minutos para permitir que Azure sincronice sin abortar
-        takeoverOnConflict: true,
-        takeoverTimeoutMs: 15000,
+        authStrategy: new LocalAuth({
+            dataPath: './.wwebjs_auth'
+        }),
+        authTimeoutMs: 120000,
         puppeteer: {
             headless: true,
-            timeout: 120000,
             args: [
-                '--no-sandbox', 
+                '--no-sandbox',
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
                 '--disable-accelerated-2d-canvas',
@@ -577,10 +357,10 @@ function inicializarCliente() {
                 '--no-zygote',
                 '--disable-gpu',
                 '--disable-extensions',
-                '--disable-software-rasterizer',
+                '--disable-background-networking',
                 '--disable-default-apps',
-                '--mute-audio',
-                '--disable-background-networking'
+                '--disable-sync',
+                '--js-flags=--max-old-space-size=512'
             ]
         }
     });
@@ -593,7 +373,7 @@ function inicializarCliente() {
     client.on('qr', async (qr) => {
         currentStatus = 'QR_READY';
         console.log('=====================================================');
-        console.log('👉 NUEVO CÓDIGO QR GENERADO. Escanéalo con tu celular:');
+        console.log('👉 NUEVO CÓDIGO QR GENERADO:');
         qrcodeTerminal.generate(qr, { small: true });
         console.log('=====================================================');
 
@@ -606,18 +386,25 @@ function inicializarCliente() {
         }
     });
 
+    // Pasa de inmediato a CONNECTED para no dejar esperando al frontend
     client.on('authenticated', () => {
-        currentStatus = 'CONNECTING';
+        currentStatus = 'CONNECTED';
         qrCodeBase64 = null;
-        console.log('🔑 [Autenticación] Sesión autenticada correctamente.');
+        if (!connectedAtTimestamp) {
+            connectedAtTimestamp = new Date().toLocaleString('es-PE', { timeZone: 'America/Lima' });
+        }
+        console.log('🔑 [Autenticación] Sesión autenticada correctamente. Estado: CONNECTED');
     });
 
     client.on('ready', () => {
         currentStatus = 'CONNECTED';
         qrCodeBase64 = null;
+        if (client.info && client.info.wid) {
+            connectedPhoneNumber = client.info.wid.user;
+            console.log(`📱 Conectado como: ${connectedPhoneNumber}`);
+        }
         console.log('=====================================================');
         console.log('✅ ¡WhatsApp Web listo y conectado con éxito!');
-        console.log(`📡 Enviando webhooks a: ${BACKEND_URL}`);
         console.log('=====================================================');
     });
 
@@ -626,24 +413,26 @@ function inicializarCliente() {
         if (state === 'DISCONNECTED' || state === 'UNPAIRED') {
             currentStatus = 'DISCONNECTED';
             qrCodeBase64 = null;
-            console.warn('⚠️ Conexión perdida con el dispositivo remoto');
         }
     });
 
     client.on('message_create', async (msg) => {
         try {
+            // Si el cliente procesa mensajes, garantizar estado CONNECTED
+            if (currentStatus !== 'CONNECTED') {
+                currentStatus = 'CONNECTED';
+                qrCodeBase64 = null;
+            }
+
             const rawMsgId = msg.id?.id || 'null';
-            console.log(`📥 [Mensaje Creado/Detectado] ID: ${rawMsgId} | from: ${msg.from} | to: ${msg.to} | De mí: ${msg.fromMe} | Cuerpo: "${msg.body || '(sin texto)'}"`);
 
             if (msg.id?.id && isDuplicateMsg(msg.id.id)) {
-                console.log(`ℹ️ [Filtro Node] Mensaje con ID ${msg.id.id} ya procesado recientemente. Omitiendo webhook duplicado.`);
                 return;
             }
 
             const remoteJid = msg.fromMe ? msg.to : msg.from;
 
             if (!remoteJid || (!remoteJid.endsWith('@c.us') && !remoteJid.endsWith('@lid'))) {
-                console.log(`ℹ️ [Filtro] Mensaje ignorado por no pertenecer a un chat individual (@c.us o @lid). JID: ${remoteJid}`);
                 return;
             }
 
@@ -662,9 +451,7 @@ function inicializarCliente() {
                         pushName = contact.pushname || contact.name || 'Cliente WhatsApp';
                     }
                 }
-            } catch (errContact) {
-                console.warn('⚠️ No se pudo recuperar el nombre del contacto, usando por defecto:', errContact.message);
-            }
+            } catch (errContact) {}
 
             let conversationText = msg.body || '';
 
@@ -674,7 +461,6 @@ function inicializarCliente() {
                     if (media && media.data) {
                         const mime = (media.mimetype || 'image/jpeg').toLowerCase();
                         const filename = (media.filename || '').toLowerCase();
-                        
                         const isImageMime = mime.startsWith('image/');
                         const isImageExt = filename.endsWith('.jpg') || filename.endsWith('.jpeg') || filename.endsWith('.png') || filename.endsWith('.webp');
                         const isImageOrVoucherDoc = isImageMime || msg.type === 'image' || isImageExt;
@@ -698,7 +484,6 @@ function inicializarCliente() {
                         const rawId = msg.id?.id || 'desconocido';
                         const isPotentialVoucher = msg.type === 'image' || msg.type === 'document' || msg.hasMedia;
                         if (isPotentialVoucher && msg.type !== 'audio' && msg.type !== 'ptt') {
-                            console.warn(`⚠️ [Media Fallback] Descarga fallida de comprobante/imagen para mensaje ID ${rawId}. Generando [VOUCHER_FALLIDO].`);
                             conversationText = `[VOUCHER_FALLIDO] | El cliente adjuntó un comprobante pero no pudo descargarse automáticamente | wamid:${rawId}`;
                             if (msg.body && msg.body.trim()) {
                                 conversationText += ` | ${msg.body}`;
@@ -708,14 +493,7 @@ function inicializarCliente() {
                         }
                     }
                 } catch (err) {
-                    console.error('⚠️ Error procesando multimedia:', err.message);
-                    const rawId = msg.id?.id || 'desconocido';
-                    const isPotentialVoucher = msg.type === 'image' || msg.type === 'document' || msg.hasMedia;
-                    if (isPotentialVoucher && msg.type !== 'audio' && msg.type !== 'ptt') {
-                        conversationText = `[VOUCHER_FALLIDO] | El cliente adjuntó un comprobante pero no pudo descargarse automáticamente | wamid:${rawId}`;
-                    } else {
-                        conversationText = '[Archivo]';
-                    }
+                    conversationText = '[Archivo]';
                 }
             }
 
@@ -739,10 +517,8 @@ function inicializarCliente() {
             };
 
             const logPayload = JSON.parse(JSON.stringify(payload));
-            if (logPayload.data && logPayload.data.message && logPayload.data.message.conversation) {
-                if (logPayload.data.message.conversation.startsWith('[VOUCHER] data:')) {
-                    logPayload.data.message.conversation = logPayload.data.message.conversation.substring(0, 100) + '... [Base64 Truncado]';
-                }
+            if (logPayload.data?.message?.conversation?.startsWith('[VOUCHER] data:')) {
+                logPayload.data.message.conversation = logPayload.data.message.conversation.substring(0, 100) + '... [Base64 Truncado]';
             }
             console.log('📤 Enviando payload al backend:', JSON.stringify(logPayload, null, 2));
 
@@ -755,7 +531,7 @@ function inicializarCliente() {
                 }
             })
             .then(response => {
-                console.log(`🚀 Webhook enviado con éxito. Respuesta del backend: ${response.data}`);
+                console.log(`🚀 Webhook enviado con éxito. Respuesta del backend:`, response.data);
             })
             .catch(error => {
                 console.error('❌ Error enviando webhook al backend:', error.message);
@@ -763,7 +539,7 @@ function inicializarCliente() {
                     console.error(`   Código HTTP de error: ${error.response.status}`);
                     console.error(`   Cuerpo del error:`, error.response.data);
                 } else if (error.request) {
-                    console.error(`   No se pudo recibir respuesta del backend local. ¿El servidor Spring Boot está corriendo en el puerto 8080?`);
+                    console.error(`   No se pudo recibir respuesta del backend en: ${BACKEND_URL}`);
                 }
             });
 
@@ -806,5 +582,5 @@ function rebotarConexion() {
     }, 5000);
 }
 
-// Iniciar automáticamente el cliente al arrancar el script
+// Iniciar cliente al arrancar el script
 inicializarCliente();
