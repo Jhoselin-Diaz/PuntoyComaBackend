@@ -227,1396 +227,1441 @@ public class OpenAiService {
         procesarMensajeConIASincrono(chatId, telefono, mensajeEntrante, true);
     }
 
+    public static class DatosConciliacionExtraidos {
+        public String nombreCompleto = "";
+        public String dni = "";
+        public String telefono = "";
+        public String departamento = "";
+        public String provincia = "";
+        public String distrito = "";
+        public String direccionExacta = "";
+        public String referencia = "Sin referencia";
+    }
+
+    private static class ContextoIaPreparado {
+        boolean esFlujoManejadoDeterminista = false;
+        HttpEntity<String> entity;
+        boolean esCarritoInicial;
+        boolean esCompraNatural;
+        boolean esSolicitudDeProductos;
+        LocalDateTime ahoraLima;
+        LocalDateTime fechaInicioCiclo;
+        Long idMensajeActual;
+        List<Mensaje> historial;
+        List<Pedido> pedidosCliente;
+        Long pedidoPendienteActivoId;
+        Long pedidoRecienCreadoCarritoId;
+        int cantidadPedidosPendientesPrevios;
+        boolean tienePedidoPendiente;
+        String formattedCorpNum;
+        String textoProductosCarrito;
+
+        public static ContextoIaPreparado manejadoDeterminista() {
+            ContextoIaPreparado c = new ContextoIaPreparado();
+            c.esFlujoManejadoDeterminista = true;
+            return c;
+        }
+    }
+
+    private DatosConciliacionExtraidos extraerDatosConciliacionConFallback(JsonNode datosConciliacionNode, String mensajeEntrante, List<Mensaje> historial) {
+        DatosConciliacionExtraidos d = new DatosConciliacionExtraidos();
+
+        if (datosConciliacionNode != null) {
+            d.nombreCompleto = getSafeString(datosConciliacionNode, "nombreCompleto");
+            d.dni = getSafeString(datosConciliacionNode, "dni");
+            d.telefono = getSafeString(datosConciliacionNode, "telefono");
+            if (d.telefono.isEmpty()) d.telefono = getSafeString(datosConciliacionNode, "telefonoContacto");
+            d.departamento = getSafeString(datosConciliacionNode, "departamento");
+            d.provincia = getSafeString(datosConciliacionNode, "provincia");
+            d.distrito = getSafeString(datosConciliacionNode, "distrito");
+            d.direccionExacta = getSafeString(datosConciliacionNode, "direccionExacta");
+            if (d.direccionExacta.isEmpty()) d.direccionExacta = getSafeString(datosConciliacionNode, "direccionEntrega");
+            d.referencia = getSafeString(datosConciliacionNode, "referencia");
+            if (d.referencia.isEmpty()) d.referencia = getSafeString(datosConciliacionNode, "referencias");
+        }
+
+        // Recopilar textos de mensajes entrantes recientes para fallback determinista
+        StringBuilder corpus = new StringBuilder();
+        if (mensajeEntrante != null) {
+            corpus.append(mensajeEntrante).append("\n");
+        }
+        if (historial != null) {
+            for (int i = historial.size() - 1; i >= 0 && i >= historial.size() - 4; i--) {
+                Mensaje m = historial.get(i);
+                if ("CLIENTE".equalsIgnoreCase(m.getRemitente()) && m.getContenido() != null) {
+                    corpus.append(m.getContenido()).append("\n");
+                }
+            }
+        }
+        String texto = corpus.toString();
+
+        if (d.nombreCompleto.isEmpty() || "null".equalsIgnoreCase(d.nombreCompleto) || "Cliente".equalsIgnoreCase(d.nombreCompleto)) {
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?i)(?:📍\\s*)?(?:nombre(?:\\s+completo)?)\\s*[:=-]\\s*([^\\n\\r,]+)").matcher(texto);
+            if (m.find()) d.nombreCompleto = m.group(1).trim();
+        }
+        if (d.dni.isEmpty() || "null".equalsIgnoreCase(d.dni)) {
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?i)(?:📍\\s*)?dni\\s*[:=-]\\s*([0-9]{8,9})").matcher(texto);
+            if (m.find()) {
+                d.dni = m.group(1).trim();
+            } else {
+                java.util.regex.Matcher m2 = java.util.regex.Pattern.compile("\\b([0-9]{8})\\b").matcher(texto);
+                if (m2.find()) d.dni = m2.group(1).trim();
+            }
+        }
+        if (d.telefono.isEmpty() || "null".equalsIgnoreCase(d.telefono)) {
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?i)(?:📍\\s*)?(?:tel[eé]fono|celular)\\s*[:=-]\\s*([0-9+\\s]{9,15})").matcher(texto);
+            if (m.find()) d.telefono = m.group(1).replaceAll("[^0-9+]", "").trim();
+        }
+        if (d.departamento.isEmpty() || "null".equalsIgnoreCase(d.departamento)) {
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?i)(?:📍\\s*)?(?:departamento|dpto)\\s*[:=-]\\s*([^\\n\\r,]+)").matcher(texto);
+            if (m.find()) d.departamento = m.group(1).trim();
+        }
+        if (d.provincia.isEmpty() || "null".equalsIgnoreCase(d.provincia)) {
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?i)(?:📍\\s*)?provincia\\s*[:=-]\\s*([^\\n\\r,]+)").matcher(texto);
+            if (m.find()) d.provincia = m.group(1).trim();
+        }
+        if (d.distrito.isEmpty() || "null".equalsIgnoreCase(d.distrito)) {
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?i)(?:📍\\s*)?distrito\\s*[:=-]\\s*([^\\n\\r,]+)").matcher(texto);
+            if (m.find()) d.distrito = m.group(1).trim();
+        }
+        if (d.direccionExacta.isEmpty() || "null".equalsIgnoreCase(d.direccionExacta)) {
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?i)(?:📍\\s*)?(?:direcci[oó]n(?:\\s+exacta)?|dir:?)\\s*[:=-]\\s*([^\\n\\r]+)").matcher(texto);
+            if (m.find()) d.direccionExacta = m.group(1).trim();
+        }
+        if (d.referencia == null || d.referencia.trim().isEmpty() || "null".equalsIgnoreCase(d.referencia)) {
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?i)(?:📍\\s*)?referencias?\\s*[:=-]\\s*([^\\n\\r]+)").matcher(texto);
+            if (m.find() && !m.group(1).trim().isEmpty()) {
+                d.referencia = m.group(1).trim();
+            } else {
+                d.referencia = "Sin referencia";
+            }
+        }
+
+        return d;
+    }
+
     public void procesarMensajeConIASincrono(Long chatId, String telefono, String mensajeEntrante, boolean soloSugerencia) {
         log.info("[OpenAI Service] Iniciando procesamiento SÍNCRONO para el chat ID: {}, Teléfono: {}, soloSugerencia: {}", chatId, telefono, soloSugerencia);
-        
+
         if (apiKey == null || apiKey.trim().isEmpty() || (apiKey.startsWith("sk-proj-xpb4m") && apiKey.length() < 30)) {
             log.warn("[OpenAI Service] OpenAI API Key no configurada o incompleta. Se omite llamada.");
             return;
         }
 
+        // =========================================================================
+        // PASO 1: LECTURA RÁPIDA Y PREPARACIÓN DE CONTEXTO (Transacción corta sin retener Hikari)
+        // =========================================================================
+        ContextoIaPreparado ctx = transactionTemplate.execute(status -> {
+            boolean esCarritoInicial = false;
+            boolean esCompraNatural = false;
+            boolean esSolicitudDeProductos = false;
+            try {
+                Chat chat = chatRepository.findById(chatId).orElse(null);
+                if (chat == null) {
+                    log.warn("[OpenAI Service] Chat no encontrado para ID: {}", chatId);
+                    return null;
+                }
+
+                if (mensajeEntrante != null) {
+                    String mLower = java.text.Normalizer.normalize(
+                        mensajeEntrante.toLowerCase().trim(),
+                        java.text.Normalizer.Form.NFD
+                    ).replaceAll("\\p{InCombiningDiacriticalMarks}+", "");
+
+                    esCarritoInicial = mLower.contains("confirmar mi pedido") ||
+                                       mLower.contains("me gustaria confirmar mi pedido") ||
+                                       mLower.contains("confirmar pedido") ||
+                                       (mLower.contains("subtotal:") && mLower.contains("total:")) ||
+                                       (mLower.startsWith("hola") && mLower.contains("pedido:") && mLower.contains("total:"));
+
+                    esCompraNatural = !esCarritoInicial && (
+                        mLower.contains("quiero pedir") ||
+                        mLower.contains("quisiera pedir") ||
+                        mLower.contains("deseo pedir") ||
+                        mLower.contains("quiero comprar") ||
+                        mLower.contains("quisiera comprar") ||
+                        mLower.contains("deseo comprar") ||
+                        mLower.contains("me interesa") ||
+                        mLower.contains("me gustaria pedir") ||
+                        mLower.contains("me gustaria comprar") ||
+                        mLower.contains("quiero un ") ||
+                        mLower.contains("quiero una ") ||
+                        mLower.contains("quiero el ") ||
+                        mLower.contains("quiero la ") ||
+                        mLower.contains("quiero los ") ||
+                        mLower.contains("quiero las ") ||
+                        mLower.contains("hola quiero") ||
+                        mLower.contains("hola quisiera") ||
+                        mLower.contains("me das un") ||
+                        mLower.contains("me das una") ||
+                        mLower.contains("me puedes dar") ||
+                        mLower.contains("quisiera confirmar mi pedido") ||
+                        mLower.contains("deseo agregar") ||
+                        mLower.contains("quiero agregar") ||
+                        mLower.contains("necesito pedir") ||
+                        mLower.contains("necesito comprar")
+                    );
+
+                    if (!esCarritoInicial && !esCompraNatural) {
+                        try {
+                            List<Producto> catalogoProductos = productoRepository.findByActivoTrue();
+                            for (Producto prod : catalogoProductos) {
+                                if (prod.getNombre() != null) {
+                                    String nomProd = java.text.Normalizer.normalize(
+                                        prod.getNombre().toLowerCase(),
+                                        java.text.Normalizer.Form.NFD
+                                    ).replaceAll("\\p{InCombiningDiacriticalMarks}+", "");
+                                    String[] palabrasProd = nomProd.split("[^a-z0-9]+");
+                                    for (String pal : palabrasProd) {
+                                        if (pal.length() > 3 && mLower.contains(pal)) {
+                                            esCompraNatural = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                                if (esCompraNatural) break;
+                            }
+                        } catch (Exception ex) {
+                            log.warn("[OpenAI Service] No se pudo verificar catálogo para detección natural: {}", ex.getMessage());
+                        }
+                    }
+                }
+                esSolicitudDeProductos = esCarritoInicial || esCompraNatural;
+                log.info("[OpenAI Service] Detección Java — esCarritoInicial: {}, esCompraNatural: {}", esCarritoInicial, esCompraNatural);
+
+                java.time.ZoneId zoneIdLima = java.time.ZoneId.of("America/Lima");
+                LocalDateTime ahoraLima = LocalDateTime.now(zoneIdLima);
+
+                List<Mensaje> historial = mensajeRepository.findTop10ByChatIdOrderByFechaEnvioDesc(chatId);
+                Collections.reverse(historial);
+
+                Mensaje mensajeActualBD = (!historial.isEmpty()) ? historial.get(historial.size() - 1) : null;
+                Long idMensajeActual = mensajeActualBD != null ? mensajeActualBD.getId() : null;
+
+                LocalDateTime fechaCorteChat = chat.getFechaCorte();
+                LocalDateTime fechaInicioCiclo = null;
+                if (esCarritoInicial) {
+                    fechaInicioCiclo = (mensajeActualBD != null && mensajeActualBD.getFechaEnvio() != null)
+                            ? mensajeActualBD.getFechaEnvio() : ahoraLima;
+                    chat.setFechaCorte(fechaInicioCiclo);
+                    chatRepository.save(chat);
+                    log.info("[OpenAI Service] Nuevo carrito inicial detectado. Establecido fechaInicioCiclo / fechaCorte: {}", fechaInicioCiclo);
+                } else if (fechaCorteChat != null) {
+                    fechaInicioCiclo = fechaCorteChat;
+                }
+
+                if (fechaInicioCiclo != null) {
+                    final LocalDateTime corteFinal = fechaInicioCiclo;
+                    historial.removeIf(m -> m.getFechaEnvio() != null && m.getFechaEnvio().isBefore(corteFinal));
+                }
+
+                StringBuilder historialStr = new StringBuilder();
+                for (Mensaje msg : historial) {
+                    historialStr.append(msg.getRemitente())
+                                .append(": ")
+                                .append(msg.getContenido())
+                                .append("\n");
+                }
+                log.info("Historial enviado a OpenAI (tras corte temporal): {}", historialStr.toString());
+                List<Mensaje> todosMensajesChat = mensajeRepository.findByChatIdOrderByFechaEnvioAsc(chatId);
+
+                List<Pedido> pedidosCliente = pedidoRepository.findByUsuarioTelefono(telefono);
+                StringBuilder contextoPedidos = new StringBuilder();
+                contextoPedidos.append("HISTORIAL DE PEDIDOS PREVIOS DEL CLIENTE:\n");
+                Pedido pedidoPendienteActivo = null;
+                Pedido pedidoRecienCreadoCarrito = null;
+                boolean tienePedidoPendiente = false;
+                int cantidadPedidosPendientesPrevios = 0;
+
+                if (pedidosCliente != null && !pedidosCliente.isEmpty()) {
+                    for (Pedido p : pedidosCliente) {
+                        if ("PENDIENTE".equalsIgnoreCase(p.getEstado())) {
+                            LocalDateTime ultimaActividadAnterior = p.getFecha() != null ? p.getFecha() : ahoraLima;
+                            if (p.getFechaPago() != null && p.getFechaPago().isAfter(ultimaActividadAnterior)) {
+                                ultimaActividadAnterior = p.getFechaPago();
+                            }
+                            if (todosMensajesChat != null && !todosMensajesChat.isEmpty()) {
+                                for (Mensaje msg : todosMensajesChat) {
+                                    if (idMensajeActual != null && idMensajeActual.equals(msg.getId())) {
+                                        continue;
+                                    }
+                                    if ("CLIENTE".equalsIgnoreCase(msg.getRemitente()) && msg.getFechaEnvio() != null) {
+                                        if (p.getFecha() != null && !msg.getFechaEnvio().isBefore(p.getFecha()) && msg.getFechaEnvio().isAfter(ultimaActividadAnterior)) {
+                                            ultimaActividadAnterior = msg.getFechaEnvio();
+                                        }
+                                    }
+                                }
+                            }
+
+                            long horasInactividad = java.time.Duration.between(ultimaActividadAnterior, ahoraLima).toHours();
+
+                            if (horasInactividad >= 24) {
+                                if (!soloSugerencia) {
+                                    p.setEstado("RECHAZADO");
+                                    p.setResultadoConciliacion("PEDIDO EXPIRADO POR INACTIVIDAD (+24 HORAS)");
+                                    pedidoRepository.save(p);
+                                    log.info("[PEDIDO EXPIRADO] Pedido ID {} del cliente {} expiró por inactividad previa ({}h). Estado actualizado a RECHAZADO.", p.getId(), telefono, horasInactividad);
+                                }
+
+                                contextoPedidos.append("- Pedido ID: ").append(p.getId())
+                                               .append(" [PEDIDO ANTERIOR EXPIRADO POR INACTIVIDAD (+24 HORAS) - YA NO ES ACTIVO]\n");
+                            } else {
+                                long minutosCreacion = p.getFecha() != null ? java.time.Duration.between(p.getFecha(), ahoraLima).toMinutes() : 999;
+                                boolean esPedidoRecienCreadoDeEsteCarrito = esCarritoInicial && minutosCreacion <= 10;
+
+                                if (esPedidoRecienCreadoDeEsteCarrito) {
+                                    pedidoRecienCreadoCarrito = p;
+                                    contextoPedidos.append("- Pedido ID: ").append(p.getId())
+                                                   .append(", Fecha: ").append(p.getFecha())
+                                                   .append(", Estado: ").append(p.getEstado())
+                                                   .append(", Total: S/.").append(p.getTotal() != null ? p.getTotal() : 0.0)
+                                                   .append(", Productos: ").append(p.getVariantesEspecificas() != null ? p.getVariantesEspecificas() : "N/A")
+                                                   .append(" (EN CURSO - CARRITO ACTUAL DE ESTA SESIÓN)\n");
+                                } else {
+                                    cantidadPedidosPendientesPrevios++;
+                                    if (pedidoPendienteActivo == null) {
+                                        pedidoPendienteActivo = p;
+                                    }
+                                    contextoPedidos.append("- Pedido ID: ").append(p.getId())
+                                                   .append(", Fecha: ").append(p.getFecha())
+                                                   .append(", Estado: ").append(p.getEstado())
+                                                   .append(", Total: S/.").append(p.getTotal() != null ? p.getTotal() : 0.0)
+                                                   .append(", Productos: ").append(p.getVariantesEspecificas() != null ? p.getVariantesEspecificas() : "N/A")
+                                                   .append(" (ACTIVO - Inactividad: ").append(horasInactividad).append("h)\n");
+                                }
+                            }
+                        } else {
+                            contextoPedidos.append("- Pedido ID: ").append(p.getId())
+                                           .append(", Fecha: ").append(p.getFecha())
+                                           .append(", Estado: ").append(p.getEstado())
+                                           .append(", Total: S/.").append(p.getTotal() != null ? p.getTotal() : 0.0)
+                                           .append(", Productos: ").append(p.getVariantesEspecificas() != null ? p.getVariantesEspecificas() : "N/A")
+                                           .append("\n");
+                        }
+                    }
+                } else {
+                    contextoPedidos.append("El cliente no cuenta con pedidos previos registrados.\n");
+                }
+
+                if (cantidadPedidosPendientesPrevios > 0) {
+                    tienePedidoPendiente = true;
+                } else {
+                    tienePedidoPendiente = false;
+                    if (pedidoPendienteActivo == null && pedidoRecienCreadoCarrito != null) {
+                        pedidoPendienteActivo = pedidoRecienCreadoCarrito;
+                    }
+                }
+
+                if (!tienePedidoPendiente) {
+                    contextoPedidos.append("\nREGLA CRÍTICA DE BASE DE DATOS: El cliente NO TIENE NINGÚN PEDIDO PENDIENTE PREVIO en BD en este momento. CUALQUIER mención a un pedido pendiente en mensajes antiguos del historial es OBSOLETA. Si existe un pedido en curso, corresponde a este mismo carrito inicial. PROHIBIDO sugerir 'Tienes un pedido pendiente' o preguntar por continuar/nuevo.\n");
+                }
+
+                List<Producto> productosActivos = productoRepository.findByActivoTrue();
+                StringBuilder contextoStock = new StringBuilder();
+                contextoStock.append("DISPONIBILIDAD REAL DE STOCK EN INVENTARIO (BASE DE DATOS):\n");
+                for (Producto prod : productosActivos) {
+                    int st = prod.getStock() != null ? prod.getStock() : 0;
+                    contextoStock.append("- ").append(prod.getNombre())
+                                 .append(" (ID: ").append(prod.getId()).append("): ")
+                                 .append("Stock disponible = ").append(st)
+                                 .append(st == 0 ? " [AGOTADO]" : "")
+                                 .append(", Precio: S/.").append(prod.getPrecio() != null ? prod.getPrecio() : 0.0)
+                                 .append("\n");
+                }
+
+                ReemplazoStockResult flujoReemplazo = evaluarFlujoReemplazoStock(
+                        chat,
+                        pedidoPendienteActivo,
+                        mensajeEntrante,
+                        historial,
+                        idMensajeActual,
+                        fechaInicioCiclo,
+                        productoRepository.findAll()
+                );
+                if (flujoReemplazo.manejado) {
+                    log.info("[OpenAI Service] Flujo de reemplazo de stock detectado para chat ID {}. Respuesta determinista aplicada (se omite llamada a OpenAI).", chatId);
+                    chat.setSugerenciaIa(flujoReemplazo.respuestaSugerida);
+                    chat.setContextoInmediato(flujoReemplazo.nuevoContextoInmediato);
+                    chat.setPrioridad(flujoReemplazo.prioridad);
+                    chat.setPedidoIdentificado(flujoReemplazo.pedidoIdentificado);
+                    chat.setDireccionDetectada(flujoReemplazo.direccionDetectada);
+                    chat.setDatosCompletos(flujoReemplazo.datosCompletos);
+                    chat.setFasePedido(flujoReemplazo.fasePedido);
+                    if (pedidoPendienteActivo != null) {
+                        chat.setPedidoReferenciadoId(pedidoPendienteActivo.getId());
+                    }
+                    chatRepository.save(chat);
+                    return ContextoIaPreparado.manejadoDeterminista();
+                }
+
+                HttpHeaders headers = new HttpHeaders();
+                headers.setContentType(MediaType.APPLICATION_JSON);
+                headers.setBearerAuth(apiKey);
+
+                String formattedCorpNum = formatNumberCommercial(corporateNumber);
+
+                String systemPrompt = "Actúa como el asistente inteligente y experto en ventas de nuestro e-commerce 'Punto y Coma'.\n" +
+                        "IMPORTANTE: Operas bajo el modelo de ASISTENCIA HUMANO-IN-THE-LOOP. Tu función es interpretar la conversación, evaluar la disponibilidad real de inventario y proponer una 'respuestaSugerida' para que el administrador la revise y confirme. NUNCA tomas decisiones administrativas autónomas.\n\n";
+
+                if ("SOLICITAR_FALTANTE".equals(chat.getContextoInmediato())) {
+                    systemPrompt += "REGLA DE CONTEXTO DE ACCIÓN INMEDIATA ADMINISTRADOR ACTIVA (SOLICITAR MONTO FALTANTE):\n" +
+                            "- El administrador ha determinado que el cliente envió un voucher con un monto menor al total del pedido.\n" +
+                            "- IGNORA cualquier saludo genérico, no solicites datos de entrega y no pidas voucher nuevo.\n" +
+                            "- Tu 'respuestaSugerida' DEBE ser DIRECTAMENTE un mensaje sumamente educado, empático y comercial redactado para el cliente, solicitándole completar el saldo pendiente de pago para poder proceder con el despacho de su pedido.\n\n";
+                }
+
+                systemPrompt += "FLUIDO COMERCIAL Y ETAPAS OBLIGATORIAS DE COMPRA POR WHATSAPP:\n\n" +
+                        "1. FASE 'INICIAL': Se activa cuando el cliente saluda, consulta productos, indica su pedido o no ha completado los datos de entrega.\n" +
+                        "   a) INTERPRETA las cantidades solicitadas de cada producto (ej. 'Taza rosa x2 y Taza roja x1').\n" +
+                        "   b) CONSULTA OBLIGATORIAMENTE el bloque 'DISPONIBILIDAD REAL DE STOCK EN INVENTARIO (BASE DE DATOS)'. PROHIBIDO inventar stock.\n" +
+                        "   c) EN TU 'respuestaSugerida', INFORMA SIEMPRE PRIMERO LA DISPONIBILIDAD DE STOCK:\n" +
+                        "      - Si TODO tiene stock: Confirma disponibilidad amablemente (ej. '¡Hola! Contamos con disponibilidad para las 2 Tazas artesanales de arcilla y 1 Taza Nube 😊.').\n" +
+                        "      - Si hay STOCK PARCIAL (solicitado > disponible): Informa la cantidad disponible exacta vs solicitada.\n" +
+                        "      - Si el producto está AGOTADO (stock = 0): Informa con amabilidad que el producto está agotado y ofrece las unidades disponibles o alternativas.\n" +
+                        "   d) SOLICITUD DE DATOS DE ENTREGA:\n" +
+                        "      - Si el cliente inicia compra o no ha brindado datos, solicita los datos de entrega usando la plantilla:\n" +
+                        PLANTILLA_DATOS_ENTREGA + "\n" +
+                        "   e) REGLA ANTIRRETORNO Y DATOS PARCIALES:\n" +
+                        "      - Si el cliente proporciona algunos datos de entrega pero falta algún campo crítico (por ejemplo: dio dirección pero no dio DNI, o viceversa), NUNCA reinicies la conversación ni reenvíes la plantilla completa de 8 campos.\n" +
+                        "      - Agradece amablemente los datos recibidos y solicita ÚNICAMENTE el campo o campos específicos que falten.\n" +
+                        "      - Considera la dirección como completa si el cliente proporciona: (1) Dirección física/calle y (2) al menos un dato geográfico (distrito, provincia o departamento). Las referencias son opcionales.\n" +
+                        "      - Si los datos esenciales ya están presentes, transiciona a 'CONCILIACION' y procede con el pago.\n" +
+                        "   *PROHIBIDO solicitar métodos de pago o enviar números de Yape/Plin mientras los datos de entrega estén completamente ausentes.*\n\n" +
+                        "2. FASE 'CONCILIACION': Se activa cuando los datos de entrega (Nombre completo, DNI, Teléfono y Dirección con distrito/provincia) estén presentes en el historial o en el mensaje actual, o cuando el cliente envía un voucher.\n" +
+                        "   - Confirmar que los datos de entrega fueron registrados.\n" +
+                        "   - Indicar el monto total exacto del pedido.\n" +
+                        "   - En tu 'respuestaSugerida', guiar al cliente para que realice el pago indicando el método que prefiera (Yape, Plin o Transferencia).\n" +
+                        "   *REGLA DE PAGO OBLIGATORIA: Si se envían las instrucciones de Yape o Plin, la 'respuestaSugerida' DEBE incluir de forma obligatoria y explícita que el número celular para realizar el abono por Yape o Plin es " + formattedCorpNum + ".*\n" +
+                        "   - Solicitar amablemente que envíe la captura o voucher del pago por este chat.\n\n" +
+                        "REGLA DE RESPUESTA SUGERIDA Y CONTROL DE DECISIÓN DE PEDIDOS EN LA BD:\n" +
+                        " - INTENCIÓN DE PEDIDO (intencionPedido):\n" +
+                        "   * 'NUEVO': El cliente indica explícitamente que desea iniciar un pedido nuevo/separado/independiente.\n" +
+                        "   * 'CONTINUAR': El cliente indica explícitamente que desea modificar o proceder con su pedido pendiente previo.\n" +
+                        "   * 'DECISION_PENDIENTE': Existe un pedido PENDIENTE activo (<24h) y el cliente solicita productos o responde de forma ambigua SIN haber aclarado explícitamente si desea continuar o crear uno nuevo.\n" +
+                        "   * 'NINGUNO': No aplica o es una consulta general.\n" +
+                        " - REGLA OBLIGATORIA PARA INTENCIÓN CONTINUAR: Cuando intencionPedido sea CONTINUAR, datosPedidoSuperficial.productos debe contener ÚNICAMENTE los productos NUEVOS solicitados en la última interacción del cliente.\n" +
+                        " - SI existe un PEDIDO ANTERIOR EXPIRADO POR INACTIVIDAD (+24 HORAS), dicho pedido pasó a RECHAZADO y YA NO ES ACTIVO. NO intentes continuar ese pedido.\n" +
+                        " - SI el cliente está respondiendo a una oferta de REEMPLAZO por producto agotado, PROHIBIDO asignar 'DECISION_PENDIENTE'.\n" +
+                        " - SI el estado del pedido es 'PENDIENTE' y el cliente ya envió un voucher ('[VOUCHER]'), la 'respuestaSugerida' DEBE indicar que el comprobante está en proceso de validación por el equipo.\n" +
+                        " - SI el estado del pedido es 'VALIDADO', redactarás una confirmación feliz de que el pago fue validado y que el pedido se está preparando para despacho.\n" +
+                        " - SI el estado del pedido es 'RECHAZADO' por un motivo real de comprobante/OCR, redactarás un mensaje amable alertando sobre la discrepancia sin reiniciar el pedido comercial.\n\n";
+
+                systemPrompt += "Debes retornar UNICAMENTE un objeto JSON de salida:\n" +
+                        "{\n" +
+                        "  \"fasePedido\": \"INICIAL\" | \"CONCILIACION\" | \"RECLAMO_CONSULTA\",\n" +
+                        "  \"intencionPedido\": \"NUEVO\" | \"CONTINUAR\" | \"DECISION_PENDIENTE\" | \"NINGUNO\",\n" +
+                        "  \"datosPedidoSuperficial\": {\n" +
+                        "    \"productos\": [\n" +
+                        "      {\n" +
+                        "        \"productoNombre\": string o null,\n" +
+                        "        \"cantidad\": int o null,\n" +
+                        "        \"precioUnitario\": double o null,\n" +
+                        "        \"subtotal\": double o null\n" +
+                        "      }\n" +
+                        "    ],\n" +
+                        "    \"totalEsperado\": double o null\n" +
+                        "  },\n" +
+                        "  \"datosConciliacion\": {\n" +
+                        "    \"nombreCompleto\": string o null,\n" +
+                        "    \"dni\": string o null,\n" +
+                        "    \"telefono\": string o null,\n" +
+                        "    \"departamento\": string o null,\n" +
+                        "    \"provincia\": string o null,\n" +
+                        "    \"distrito\": string o null,\n" +
+                        "    \"direccionExacta\": string o null,\n" +
+                        "    \"referencia\": string o null,\n" +
+                        "    \"direccionEntrega\": string o null,\n" +
+                        "    \"telefonoContacto\": string o null,\n" +
+                        "    \"variantesEspecificas\": string o null\n" +
+                        "  },\n" +
+                        "  \"totalEsperado\": double o null,\n" +
+                        "  \"pedidoIdentificado\": boolean,\n" +
+                        "  \"direccionDetectada\": boolean,\n" +
+                        "  \"datosCompletos\": boolean,\n" +
+                        "  \"prioridad\": \"ALTA\" | \"INTERMEDIA\" | \"BAJA\",\n" +
+                        "  \"pedidoReferenciadoId\": Long o null,\n" +
+                        "  \"respuestaSugerida\": string\n" +
+                        "}";
+
+                ObjectNode requestBody = objectMapper.createObjectNode();
+                requestBody.put("model", "gpt-4o-mini");
+
+                ArrayNode messagesArray = objectMapper.createArrayNode();
+
+                ObjectNode systemMessage = objectMapper.createObjectNode();
+                systemMessage.put("role", "system");
+                systemMessage.put("content", systemPrompt);
+                messagesArray.add(systemMessage);
+
+                String estadoPedidoPendiente = "NINGUNO";
+                String resultadoOcrPendiente = "NINGUNO";
+                double totalPedido = 0.0;
+                double montoOcr = 0.0;
+                double diferenciaMonto = 0.0;
+                StringBuilder bloqueVouchers = new StringBuilder();
+                String estadoFinancieroBD = "SIN PEDIDO PENDIENTE";
+
+                if (pedidoPendienteActivo != null) {
+                    estadoPedidoPendiente = pedidoPendienteActivo.getEstado();
+                    String resBD = pedidoPendienteActivo.getResultadoConciliacion();
+                    if (resBD != null && (resBD.contains("NUEVO PEDIDO") || resBD.contains("INACTIVIDAD") || resBD.contains("EXPIRADO"))) {
+                        resultadoOcrPendiente = "NINGUNO (Cierre comercial/expiración anterior - NO es rechazo de voucher)";
+                    } else {
+                        resultadoOcrPendiente = resBD != null ? resBD : "Sin resultado";
+                    }
+                    totalPedido = pedidoPendienteActivo.getTotal() != null ? pedidoPendienteActivo.getTotal() : 0.0;
+                    Double sumBD = pagoVoucherRepository.obtenerMontoTotalPagadoPorPedido(pedidoPendienteActivo.getId());
+                    montoOcr = sumBD != null ? sumBD : (pedidoPendienteActivo.getMontoOcr() != null ? pedidoPendienteActivo.getMontoOcr() : 0.0);
+                    diferenciaMonto = totalPedido - montoOcr;
+
+                    List<PagoVoucher> listaVouchers = pagoVoucherRepository.findByPedidoIdOrderByFechaPagoAsc(pedidoPendienteActivo.getId());
+                    if (listaVouchers != null && !listaVouchers.isEmpty()) {
+                        for (int i = 0; i < listaVouchers.size(); i++) {
+                            PagoVoucher v = listaVouchers.get(i);
+                            bloqueVouchers.append(String.format(" - Voucher %d: S/ %.2f (Ref: %s)\n",
+                                    i + 1, v.getMonto() != null ? v.getMonto() : 0.0,
+                                    v.getReferencia() != null ? v.getReferencia() : "Sin ref"));
+                        }
+                    } else {
+                        bloqueVouchers.append(" - Ningún voucher registrado aún\n");
+                    }
+
+                    if (Math.abs(diferenciaMonto) < 0.01 || diferenciaMonto <= 0.0) {
+                        if (diferenciaMonto < -0.01) {
+                            estadoFinancieroBD = "SOBREPAGO (Monto pagado excede por S/ " + String.format("%.2f", Math.abs(diferenciaMonto)) + ")";
+                        } else {
+                            estadoFinancieroBD = "COMPLETAMENTE PAGADO";
+                        }
+                    } else {
+                        estadoFinancieroBD = "PAGO PARCIAL (Saldo pendiente: S/ " + String.format("%.2f", diferenciaMonto) + ")";
+                    }
+                }
+
+                ObjectNode contextMessage = objectMapper.createObjectNode();
+                contextMessage.put("role", "system");
+                contextMessage.put("content", "INFORMACIÓN DEL CLIENTE Y CONTEXTO DE COMPRAS PREVIAS:\n" +
+                        "Nombre: " + chat.getNombreCliente() + "\n" +
+                        "Teléfono: " + telefono + "\n" +
+                        "¿Tiene pedido pendiente previo activo actualmente?: " + (tienePedidoPendiente ? "SÍ (ID: " + pedidoPendienteActivo.getId() + ")" : "NO") + "\n" +
+                        "ESTADO ACTUAL DEL PEDIDO PENDIENTE EN BASE DE DATOS: " + (tienePedidoPendiente ? estadoPedidoPendiente : "NINGUNO") + "\n" +
+                        "\nESTADO REAL DE PAGOS:\n" +
+                        "Pedido total: S/ " + String.format("%.2f", totalPedido) + "\n" +
+                        "Vouchers registrados:\n" + bloqueVouchers.toString() +
+                        "Total pagado acumulado: S/ " + String.format("%.2f", montoOcr) + "\n" +
+                        "Saldo pendiente: S/ " + String.format("%.2f", diferenciaMonto) + "\n" +
+                        "Estado financiero: " + estadoFinancieroBD + "\n\n" +
+                        "RESULTADO OCR CONCILIACIÓN DEL PEDIDO PENDIENTE: " + resultadoOcrPendiente + "\n" +
+                        "CONTEXTO CONVERSACIONAL DE INTERACCIÓN ANTERIOR: " + (chat.getContextoInmediato() != null ? chat.getContextoInmediato() : "NINGUNO") + "\n\n" +
+                        contextoStock.toString() + "\n" +
+                        contextoPedidos.toString());
+                messagesArray.add(contextMessage);
+
+                for (Mensaje msg : historial) {
+                    ObjectNode msgNode = objectMapper.createObjectNode();
+                    String role = "user";
+                    if ("ADMINISTRADOR".equalsIgnoreCase(msg.getRemitente())) {
+                        role = "assistant";
+                    }
+                    msgNode.put("role", role);
+                    String cont = msg.getContenido();
+                    if (cont != null) {
+                        if (cont.contains("data:image/") || cont.contains("[VOUCHER]")) {
+                            boolean esVoucherHistoricoCerrado = false;
+                            if (pedidoPendienteActivo != null && pedidoPendienteActivo.getFecha() != null && msg.getFechaEnvio() != null) {
+                                if (msg.getFechaEnvio().isBefore(pedidoPendienteActivo.getFecha().minusSeconds(5))) {
+                                    esVoucherHistoricoCerrado = true;
+                                }
+                            } else if (pedidoPendienteActivo == null) {
+                                esVoucherHistoricoCerrado = true;
+                            }
+
+                            if (esVoucherHistoricoCerrado) {
+                                cont = "[Comprobante de compra anterior ya cerrada y finalizada - NO aplica para el pedido actual]";
+                            } else {
+                                cont = "[VOUCHER / Comprobante de pago enviado por el cliente para el pedido actual]";
+                            }
+                        } else if (cont.length() > 1000) {
+                            cont = cont.substring(0, 1000) + "...";
+                        }
+                    }
+                    msgNode.put("content", cont != null ? cont : "");
+                    messagesArray.add(msgNode);
+                }
+
+                requestBody.set("messages", messagesArray);
+
+                ObjectNode responseFormat = objectMapper.createObjectNode();
+                responseFormat.put("type", "json_object");
+                requestBody.set("response_format", responseFormat);
+
+                HttpEntity<String> entity = new HttpEntity<>(objectMapper.writeValueAsString(requestBody), headers);
+
+                ContextoIaPreparado prep = new ContextoIaPreparado();
+                prep.entity = entity;
+                prep.esCarritoInicial = esCarritoInicial;
+                prep.esCompraNatural = esCompraNatural;
+                prep.esSolicitudDeProductos = esSolicitudDeProductos;
+                prep.ahoraLima = ahoraLima;
+                prep.fechaInicioCiclo = fechaInicioCiclo;
+                prep.idMensajeActual = idMensajeActual;
+                prep.historial = historial;
+                prep.pedidosCliente = pedidosCliente;
+                prep.pedidoPendienteActivoId = pedidoPendienteActivo != null ? pedidoPendienteActivo.getId() : null;
+                prep.pedidoRecienCreadoCarritoId = pedidoRecienCreadoCarrito != null ? pedidoRecienCreadoCarrito.getId() : null;
+                prep.cantidadPedidosPendientesPrevios = cantidadPedidosPendientesPrevios;
+                prep.tienePedidoPendiente = tienePedidoPendiente;
+                prep.formattedCorpNum = formattedCorpNum;
+                prep.textoProductosCarrito = "tu pedido";
+
+                return prep;
+            } catch (Exception e) {
+                log.error("[OpenAI Service] Error en lectura/preparación de contexto (Paso 1): {}", e.getMessage(), e);
+                return null;
+            }
+        });
+
+        if (ctx == null) {
+            log.warn("[OpenAI Service] Contexto de IA no preparado o abortado.");
+            return;
+        }
+        if (ctx.esFlujoManejadoDeterminista) {
+            log.info("[OpenAI Service] Flujo determinista manejado en Paso 1. Finalizando.");
+            return;
+        }
+
+        // =========================================================================
+        // PASO 2: LLAMADA HTTP A OPENAI (100% FUERA DE CUALQUIER TRANSACCIÓN Y SIN LOCK)
+        // =========================================================================
+        log.info("[OpenAI Service] PASO 2: Enviando petición a OpenAI (FUERA DE TRANSACCIÓN BD Hikari, {} mensajes)...", ctx.historial.size());
+        String responseStr = null;
+        try {
+            responseStr = restTemplate.postForObject(apiUrl, ctx.entity, String.class);
+        } catch (Exception httpEx) {
+            log.error("[OpenAI Service] Error en llamada HTTP a OpenAI: {}", httpEx.getMessage(), httpEx);
+        }
+
+        // =========================================================================
+        // PASO 3: ESCRITURA CORTA Y PERSISTENCIA (Bajo cerrojo por cliente para atomicidad < 20ms)
+        // =========================================================================
+        final String finalResponseStr = responseStr;
         Object lock = com.upc.Util.SharedLockManager.getLock(telefono);
         synchronized (lock) {
             transactionTemplate.execute(status -> {
-                boolean esCarritoInicial = false;
-                boolean esCompraNatural = false;
-                boolean esSolicitudDeProductos = false;
                 try {
-            // 1. Obtener el chat
-            Chat chat = chatRepository.findById(chatId).orElse(null);
-            if (chat == null) {
-                log.warn("[OpenAI Service] Chat no encontrado para ID: {}", chatId);
-                return null;
-            }
+                    Chat chat = chatRepository.findById(chatId).orElse(null);
+                    if (chat == null) {
+                        log.warn("[OpenAI Service] Chat no encontrado en Paso 3 para ID: {}", chatId);
+                        return null;
+                    }
 
-            // Detección explícita de confirmación de carrito inicial (plantilla web)
-            if (mensajeEntrante != null) {
-                String mLower = java.text.Normalizer.normalize(
-                    mensajeEntrante.toLowerCase().trim(),
-                    java.text.Normalizer.Form.NFD
-                ).replaceAll("\\p{InCombiningDiacriticalMarks}+", "");
+                    Pedido pedidoPendienteActivo = ctx.pedidoPendienteActivoId != null 
+                            ? pedidoRepository.findById(ctx.pedidoPendienteActivoId).orElse(null) : null;
+                    if (pedidoPendienteActivo == null && ctx.pedidoRecienCreadoCarritoId != null) {
+                        pedidoPendienteActivo = pedidoRepository.findById(ctx.pedidoRecienCreadoCarritoId).orElse(null);
+                    }
 
-                esCarritoInicial = mLower.contains("confirmar mi pedido") ||
-                                   mLower.contains("me gustaria confirmar mi pedido") ||
-                                   mLower.contains("me gustaria confirmar mi pedido") ||
-                                   mLower.contains("confirmar pedido") ||
-                                   (mLower.contains("subtotal:") && mLower.contains("total:")) ||
-                                   (mLower.startsWith("hola") && mLower.contains("pedido:") && mLower.contains("total:"));
+                    List<Pedido> pedidosCliente = pedidoRepository.findByUsuarioTelefono(telefono);
 
-                // Frases naturales de compra (detector Java determinista)
-                esCompraNatural = !esCarritoInicial && (
-                    mLower.contains("quiero pedir") ||
-                    mLower.contains("quisiera pedir") ||
-                    mLower.contains("deseo pedir") ||
-                    mLower.contains("quiero comprar") ||
-                    mLower.contains("quisiera comprar") ||
-                    mLower.contains("deseo comprar") ||
-                    mLower.contains("me interesa") ||
-                    mLower.contains("me gustaria pedir") ||
-                    mLower.contains("me gustaria comprar") ||
-                    mLower.contains("quiero un ") ||
-                    mLower.contains("quiero una ") ||
-                    mLower.contains("quiero el ") ||
-                    mLower.contains("quiero la ") ||
-                    mLower.contains("quiero los ") ||
-                    mLower.contains("quiero las ") ||
-                    mLower.contains("hola quiero") ||
-                    mLower.contains("hola quisiera") ||
-                    mLower.contains("me das un") ||
-                    mLower.contains("me das una") ||
-                    mLower.contains("me puedes dar") ||
-                    mLower.contains("quisiera confirmar mi pedido") ||
-                    mLower.contains("deseo agregar") ||
-                    mLower.contains("quiero agregar") ||
-                    mLower.contains("necesito pedir") ||
-                    mLower.contains("necesito comprar")
-                );
+                    if (finalResponseStr != null) {
+                        JsonNode responseJson = objectMapper.readTree(finalResponseStr);
+                        String contentResult = responseJson.path("choices").get(0).path("message").path("content").asText();
+                        log.info("[OpenAI Service] Respuesta recibida de OpenAI: {}", contentResult);
 
-                // Si no detectó frase natural aún, verificar mención a productos del catálogo
-                if (!esCarritoInicial && !esCompraNatural) {
-                    try {
-                        List<Producto> catalogoProductos = productoRepository.findByActivoTrue();
-                        for (Producto prod : catalogoProductos) {
-                            if (prod.getNombre() != null) {
-                                String nomProd = java.text.Normalizer.normalize(
-                                    prod.getNombre().toLowerCase(),
-                                    java.text.Normalizer.Form.NFD
-                                ).replaceAll("\\p{InCombiningDiacriticalMarks}+", "");
-                                // Usar palabras clave del nombre del producto (> 3 chars)
-                                String[] palabrasProd = nomProd.split("[^a-z0-9]+");
-                                for (String pal : palabrasProd) {
-                                    if (pal.length() > 3 && mLower.contains(pal)) {
-                                        esCompraNatural = true;
+                        JsonNode aiResult = objectMapper.readTree(contentResult);
+                        String fasePedido = aiResult.path("fasePedido").asText("INICIAL");
+                        String intencionOpenAi = aiResult.path("intencionPedido").asText("NINGUNO").trim().toUpperCase();
+                        JsonNode datosPedidoSuperficial = aiResult.path("datosPedidoSuperficial");
+                        JsonNode datosConciliacion = aiResult.path("datosConciliacion");
+
+                        // Extracción flexible con fallback regex tolerante
+                        DatosConciliacionExtraidos datosExtraidos = extraerDatosConciliacionConFallback(datosConciliacion, mensajeEntrante, ctx.historial);
+                        String nomComp = datosExtraidos.nombreCompleto;
+                        String dniVal = datosExtraidos.dni;
+                        String telVal = datosExtraidos.telefono;
+                        String depto = datosExtraidos.departamento;
+                        String prov = datosExtraidos.provincia;
+                        String dist = datosExtraidos.distrito;
+                        String dirEx = datosExtraidos.direccionExacta;
+                        String ref = datosExtraidos.referencia;
+
+                        boolean tieneCalle = !dirEx.isEmpty();
+                        boolean tieneGeo = !dist.isEmpty() || !prov.isEmpty() || !depto.isEmpty();
+                        boolean direccionValida = tieneCalle && (tieneGeo || dirEx.length() >= 15);
+
+                        boolean tiene8Campos = !nomComp.isEmpty() && !dniVal.isEmpty() && (!telVal.isEmpty() || !telefono.isEmpty()) && direccionValida;
+                        boolean tiene5Campos = tiene8Campos || direccionValida || (!depto.isEmpty() && !prov.isEmpty() && !dist.isEmpty() && !dirEx.isEmpty());
+
+                        boolean direccionEnBD = false;
+                        if (pedidoPendienteActivo != null) {
+                            String dirEnt = pedidoPendienteActivo.getDireccionEntrega();
+                            String dirEnv = pedidoPendienteActivo.getDireccionEnvio();
+                            if (dirEnt != null && !dirEnt.trim().isEmpty() && !dirEnt.contains("null")) {
+                                direccionEnBD = true;
+                            } else if (dirEnv != null && !dirEnv.trim().isEmpty() && !dirEnv.contains("null")) {
+                                direccionEnBD = true;
+                            }
+                        }
+
+                        // Normalización sin tildes de mensajeTieneDireccion
+                        String mNorm = mensajeEntrante != null ? java.text.Normalizer.normalize(mensajeEntrante.toLowerCase(), java.text.Normalizer.Form.NFD).replaceAll("\\p{InCombiningDiacriticalMarks}+", "") : "";
+                        boolean mensajeTieneDireccion = mNorm.contains("direccion") || 
+                                                        mNorm.contains("dir:") || 
+                                                        mNorm.contains("calle") || 
+                                                        mNorm.contains("av") || 
+                                                        mNorm.contains("jr") || 
+                                                        mNorm.contains("distrito") || 
+                                                        mNorm.contains("dpto") || 
+                                                        mNorm.contains("departamento") || 
+                                                        mNorm.contains("provincia") || 
+                                                        mNorm.contains("pasaje") || 
+                                                        mNorm.contains("mz") || 
+                                                        mNorm.contains("lote");
+
+                        boolean esVoucher = mensajeEntrante != null && (mensajeEntrante.contains("[VOUCHER]") || mensajeEntrante.contains("data:image/") || mensajeEntrante.contains("[DOCUMENTO]"));
+
+                        Pedido pedidoVinculado = null;
+                        if (chat.getPedidoReferenciadoId() != null) {
+                            Pedido candidato = pedidoRepository.findById(chat.getPedidoReferenciadoId()).orElse(null);
+                            if (candidato != null && ("PENDIENTE".equalsIgnoreCase(candidato.getEstado()) || "EN REVISION".equalsIgnoreCase(candidato.getEstado()))) {
+                                pedidoVinculado = candidato;
+                            } else if (candidato != null) {
+                                log.info("[OpenAI Service] pedidoReferenciadoId {} apunta a pedido '{}' (no activo).", chat.getPedidoReferenciadoId(), candidato.getEstado());
+                            }
+                        }
+                        if (pedidoVinculado == null && pedidoPendienteActivo != null) {
+                            pedidoVinculado = pedidoPendienteActivo;
+                        }
+                        if (pedidoVinculado == null && pedidosCliente != null && !pedidosCliente.isEmpty()) {
+                            for (int idx = pedidosCliente.size() - 1; idx >= 0; idx--) {
+                                Pedido p = pedidosCliente.get(idx);
+                                if ("PENDIENTE".equalsIgnoreCase(p.getEstado()) || "EN REVISION".equalsIgnoreCase(p.getEstado())) {
+                                    LocalDateTime f = p.getFecha() != null ? p.getFecha() : ctx.ahoraLima;
+                                    long hrs = java.time.Duration.between(f, ctx.ahoraLima).toHours();
+                                    if (hrs < 24) {
+                                        pedidoVinculado = p;
                                         break;
                                     }
                                 }
                             }
-                            if (esCompraNatural) break;
-                        }
-                    } catch (Exception ex) {
-                        log.warn("[OpenAI Service] No se pudo verificar catálogo para detección natural: {}", ex.getMessage());
-                    }
-                }
-            }
-            esSolicitudDeProductos = esCarritoInicial || esCompraNatural;
-            log.info("[OpenAI Service] Detección Java — esCarritoInicial: {}, esCompraNatural: {}", esCarritoInicial, esCompraNatural);
-
-            java.time.ZoneId zoneIdLima = java.time.ZoneId.of("America/Lima");
-            LocalDateTime ahoraLima = LocalDateTime.now(zoneIdLima);
-
-            // 2. Obtener los últimos 10 mensajes del historial del chat (memoria conversacional)
-            List<Mensaje> historial = mensajeRepository.findTop10ByChatIdOrderByFechaEnvioDesc(chatId);
-            // Revertir para que queden en orden cronológico ascendente (el más antiguo primero)
-            Collections.reverse(historial);
-
-            Mensaje mensajeActualBD = (!historial.isEmpty()) ? historial.get(historial.size() - 1) : null;
-            Long idMensajeActual = mensajeActualBD != null ? mensajeActualBD.getId() : null;
-
-            // CORTE TEMPORAL ESTRICTO POR CICLO DE PEDIDO:
-            LocalDateTime fechaCorteChat = chat.getFechaCorte();
-            LocalDateTime fechaInicioCiclo = null;
-            if (esCarritoInicial) {
-                fechaInicioCiclo = (mensajeActualBD != null && mensajeActualBD.getFechaEnvio() != null)
-                        ? mensajeActualBD.getFechaEnvio() : ahoraLima;
-                chat.setFechaCorte(fechaInicioCiclo);
-                chatRepository.save(chat);
-                log.info("[OpenAI Service] Nuevo carrito inicial detectado. Establecido fechaInicioCiclo / fechaCorte: {}", fechaInicioCiclo);
-            } else if (fechaCorteChat != null) {
-                fechaInicioCiclo = fechaCorteChat;
-            }
-
-            // PROHIBIDO leer mensajes con timestamp anterior a fechaInicioCiclo
-            if (fechaInicioCiclo != null) {
-                final LocalDateTime corteFinal = fechaInicioCiclo;
-                historial.removeIf(m -> m.getFechaEnvio() != null && m.getFechaEnvio().isBefore(corteFinal));
-            }
-
-            // Reordenamiento de historial con logs cronológicos estrictos
-            StringBuilder historialStr = new StringBuilder();
-            for (Mensaje msg : historial) {
-                historialStr.append(msg.getRemitente())
-                            .append(": ")
-                            .append(msg.getContenido())
-                            .append("\n");
-            }
-            log.info("Historial enviado a OpenAI (tras corte temporal): {}", historialStr.toString());
-            List<Mensaje> todosMensajesChat = mensajeRepository.findByChatIdOrderByFechaEnvioAsc(chatId);
-
-            List<Pedido> pedidosCliente = pedidoRepository.findByUsuarioTelefono(telefono);
-            StringBuilder contextoPedidos = new StringBuilder();
-            contextoPedidos.append("HISTORIAL DE PEDIDOS PREVIOS DEL CLIENTE:\n");
-            Pedido pedidoPendienteActivo = null;
-            Pedido pedidoRecienCreadoCarrito = null;
-            boolean tienePedidoPendiente = false;
-            int cantidadPedidosPendientesPrevios = 0;
-
-            if (pedidosCliente != null && !pedidosCliente.isEmpty()) {
-                for (Pedido p : pedidosCliente) {
-                    if ("PENDIENTE".equalsIgnoreCase(p.getEstado())) {
-                        // Calcular fecha de última actividad del cliente previa al mensaje actual acotada al ciclo de vida del pedido p
-                        LocalDateTime ultimaActividadAnterior = p.getFecha() != null ? p.getFecha() : ahoraLima;
-                        if (p.getFechaPago() != null && p.getFechaPago().isAfter(ultimaActividadAnterior)) {
-                            ultimaActividadAnterior = p.getFechaPago();
-                        }
-                        if (todosMensajesChat != null && !todosMensajesChat.isEmpty()) {
-                            for (Mensaje msg : todosMensajesChat) {
-                                // Excluir de forma absoluta el mensaje actual que detonó esta llamada por su ID único de BD
-                                if (idMensajeActual != null && idMensajeActual.equals(msg.getId())) {
-                                    continue;
-                                }
-                                // Solo considerar mensajes del CLIENTE enviados durante o después de la creación de este pedido p
-                                if ("CLIENTE".equalsIgnoreCase(msg.getRemitente()) && msg.getFechaEnvio() != null) {
-                                    if (p.getFecha() != null && !msg.getFechaEnvio().isBefore(p.getFecha()) && msg.getFechaEnvio().isAfter(ultimaActividadAnterior)) {
-                                        ultimaActividadAnterior = msg.getFechaEnvio();
-                                    }
-                                }
-                            }
                         }
 
-                        long horasInactividad = java.time.Duration.between(ultimaActividadAnterior, ahoraLima).toHours();
-
-                        if (horasInactividad >= 24) {
-                            if (!soloSugerencia) {
-                                // Marcar pedido como expirado por inactividad (+24h)
-                                p.setEstado("RECHAZADO");
-                                p.setResultadoConciliacion("PEDIDO EXPIRADO POR INACTIVIDAD (+24 HORAS)");
-                                pedidoRepository.save(p);
-                                log.info("[PEDIDO EXPIRADO] Pedido ID {} del cliente {} expiró por inactividad previa ({}h). Estado actualizado a RECHAZADO.", p.getId(), telefono, horasInactividad);
-                            }
-
-                            contextoPedidos.append("- Pedido ID: ").append(p.getId())
-                                           .append(" [PEDIDO ANTERIOR EXPIRADO POR INACTIVIDAD (+24 HORAS) - YA NO ES ACTIVO]\n");
-                        } else {
-                            long minutosCreacion = p.getFecha() != null ? java.time.Duration.between(p.getFecha(), ahoraLima).toMinutes() : 999;
-                            boolean esPedidoRecienCreadoDeEsteCarrito = esCarritoInicial && minutosCreacion <= 10;
-
-                            if (esPedidoRecienCreadoDeEsteCarrito) {
-                                pedidoRecienCreadoCarrito = p;
-                                contextoPedidos.append("- Pedido ID: ").append(p.getId())
-                                               .append(", Fecha: ").append(p.getFecha())
-                                               .append(", Estado: ").append(p.getEstado())
-                                               .append(", Total: S/.").append(p.getTotal() != null ? p.getTotal() : 0.0)
-                                               .append(", Productos: ").append(p.getVariantesEspecificas() != null ? p.getVariantesEspecificas() : "N/A")
-                                               .append(" (EN CURSO - CARRITO ACTUAL DE ESTA SESIÓN)\n");
-                            } else {
-                                cantidadPedidosPendientesPrevios++;
-                                if (pedidoPendienteActivo == null) {
-                                    pedidoPendienteActivo = p;
-                                }
-                                contextoPedidos.append("- Pedido ID: ").append(p.getId())
-                                               .append(", Fecha: ").append(p.getFecha())
-                                               .append(", Estado: ").append(p.getEstado())
-                                               .append(", Total: S/.").append(p.getTotal() != null ? p.getTotal() : 0.0)
-                                               .append(", Productos: ").append(p.getVariantesEspecificas() != null ? p.getVariantesEspecificas() : "N/A")
-                                               .append(" (ACTIVO - Inactividad: ").append(horasInactividad).append("h)\n");
-                            }
-                        }
-                    } else {
-                        contextoPedidos.append("- Pedido ID: ").append(p.getId())
-                                       .append(", Fecha: ").append(p.getFecha())
-                                       .append(", Estado: ").append(p.getEstado())
-                                       .append(", Total: S/.").append(p.getTotal() != null ? p.getTotal() : 0.0)
-                                       .append(", Productos: ").append(p.getVariantesEspecificas() != null ? p.getVariantesEspecificas() : "N/A")
-                                       .append("\n");
-                    }
-                }
-            } else {
-                contextoPedidos.append("El cliente no cuenta con pedidos previos registrados.\n");
-            }
-
-            // Exclusión explícita del pedido recién creado de este carrito en tienePedidoPendiente:
-            // Si el cliente no tiene pedidos pendientes previos, tienePedidoPendiente debe ser FALSE.
-            if (cantidadPedidosPendientesPrevios > 0) {
-                tienePedidoPendiente = true;
-            } else {
-                tienePedidoPendiente = false;
-                // Si no hay pedidos previos pero sí el pedido de este carrito, mantenemos la referencia para reutilizarlo sin duplicar
-                if (pedidoPendienteActivo == null && pedidoRecienCreadoCarrito != null) {
-                    pedidoPendienteActivo = pedidoRecienCreadoCarrito;
-                }
-            }
-
-            if (!tienePedidoPendiente) {
-                contextoPedidos.append("\nREGLA CRÍTICA DE BASE DE DATOS: El cliente NO TIENE NINGÚN PEDIDO PENDIENTE PREVIO en BD en este momento. CUALQUIER mención a un pedido pendiente en mensajes antiguos del historial es OBSOLETA. Si existe un pedido en curso, corresponde a este mismo carrito inicial. PROHIBIDO sugerir 'Tienes un pedido pendiente' o preguntar por continuar/nuevo.\n");
-            }
-
-            // 3.b Obtener catálogo de productos activos con su stock real en BD para inyectar a la IA
-            List<Producto> productosActivos = productoRepository.findByActivoTrue();
-            StringBuilder contextoStock = new StringBuilder();
-            contextoStock.append("DISPONIBILIDAD REAL DE STOCK EN INVENTARIO (BASE DE DATOS):\n");
-            for (Producto prod : productosActivos) {
-                int st = prod.getStock() != null ? prod.getStock() : 0;
-                contextoStock.append("- ").append(prod.getNombre())
-                             .append(" (ID: ").append(prod.getId()).append("): ")
-                             .append("Stock disponible = ").append(st)
-                             .append(st == 0 ? " [AGOTADO]" : "")
-                             .append(", Precio: S/.").append(prod.getPrecio() != null ? prod.getPrecio() : 0.0)
-                             .append("\n");
-            }
-
-            // 3.c VERIFICACIÓN DETERMINISTA DE FLUJO DE REEMPLAZO DE STOCK Y MANEJO DE CANTIDAD:
-            ReemplazoStockResult flujoReemplazo = evaluarFlujoReemplazoStock(
-                    chat,
-                    pedidoPendienteActivo,
-                    mensajeEntrante,
-                    historial,
-                    idMensajeActual,
-                    fechaInicioCiclo,
-                    productoRepository.findAll()
-            );
-            if (flujoReemplazo.manejado) {
-                log.info("[OpenAI Service] Flujo de reemplazo de stock detectado para chat ID {}. Respuesta determinista aplicada (se omite llamada a OpenAI y DECISION_PENDIENTE).", chatId);
-                chat.setSugerenciaIa(flujoReemplazo.respuestaSugerida);
-                chat.setContextoInmediato(flujoReemplazo.nuevoContextoInmediato);
-                chat.setPrioridad(flujoReemplazo.prioridad);
-                chat.setPedidoIdentificado(flujoReemplazo.pedidoIdentificado);
-                chat.setDireccionDetectada(flujoReemplazo.direccionDetectada);
-                chat.setDatosCompletos(flujoReemplazo.datosCompletos);
-                chat.setFasePedido(flujoReemplazo.fasePedido);
-                if (pedidoPendienteActivo != null) {
-                    chat.setPedidoReferenciadoId(pedidoPendienteActivo.getId());
-                }
-                chatRepository.save(chat);
-                return null;
-            }
-
-            // 4. Construir la consulta a OpenAI
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.APPLICATION_JSON);
-            headers.setBearerAuth(apiKey);
-
-            String formattedCorpNum = formatNumberCommercial(corporateNumber);
-
-            // System prompt del e-commerce corregido con reglas de flujo obligatorias, número de Yape/Plin corporativo y calibración estricta
-            String systemPrompt = "Actúa como el asistente inteligente y experto en ventas de nuestro e-commerce 'Punto y Coma'.\n" +
-                    "IMPORTANTE: Operas bajo el modelo de ASISTENCIA HUMANO-IN-THE-LOOP. Tu función es interpretar la conversación, evaluar la disponibilidad real de inventario y proponer una 'respuestaSugerida' para que el administrador la revise y confirme. NUNCA tomas decisiones administrativas autónomas.\n\n";
-            
-            if ("SOLICITAR_FALTANTE".equals(chat.getContextoInmediato())) {
-                systemPrompt += "REGLA DE CONTEXTO DE ACCIÓN INMEDIATA ADMINISTRADOR ACTIVA (SOLICITAR MONTO FALTANTE):\n" +
-                        "- El administrador ha determinado que el cliente envió un voucher con un monto menor al total del pedido.\n" +
-                        "- IGNORA cualquier saludo genérico, no solicites datos de entrega y no pidas voucher nuevo.\n" +
-                        "- Tu 'respuestaSugerida' DEBE ser DIRECTAMENTE un mensaje sumamente educado, empático y comercial redactado para el cliente, solicitándole completar el saldo pendiente de pago para poder proceder con el despacho de su pedido.\n\n";
-            }
-            
-            systemPrompt += "FLUIDO COMERCIAL Y ETAPAS OBLIGATORIAS DE COMPRA POR WHATSAPP:\n\n" +
-                    "1. FASE 'INICIAL': Se activa cuando el cliente saluda, consulta productos, indica su pedido o no ha completado los 8 datos obligatorios de entrega.\n" +
-                    "   a) INTERPRETA las cantidades solicitadas de cada producto (ej. 'Taza rosa x2 y Taza roja x1').\n" +
-                    "   b) CONSULTA OBLIGATORIAMENTE el bloque 'DISPONIBILIDAD REAL DE STOCK EN INVENTARIO (BASE DE DATOS)'. PROHIBIDO inventar stock.\n" +
-                    "   c) EN TU 'respuestaSugerida', INFORMA SIEMPRE PRIMERO LA DISPONIBILIDAD DE STOCK:\n" +
-                    "      - Si TODO tiene stock: Confirma disponibilidad amablemente (ej. '¡Hola! Contamos con disponibilidad para las 2 Tazas artesanales de arcilla y 1 Taza Nube 😊.').\n" +
-                    "      - Si hay STOCK PARCIAL (solicitado > disponible): Informa la cantidad disponible exacta vs solicitada (ej. 'Tenemos disponible 1 Taza rosa de las 2 que solicitaste y sí contamos con la Taza roja. ¿Deseas continuar con las unidades disponibles?').\n" +
-                    "      - Si el producto está AGOTADO (stock = 0): Informa con amabilidad que el producto está agotado y ofrece las unidades disponibles o alternativas.\n" +
-                    "   d) TRAS INFORMAR LA DISPONIBILIDAD, SOLICITA OBLIGATORIAMENTE LOS DATOS DE ENTREGA EXACTOS:\n" +
-                    PLANTILLA_DATOS_ENTREGA + "\n" +
-                    "   *PROHIBIDO solicitar métodos de pago o enviar números de Yape/Plin/Transferencia mientras los datos de entrega estén incompletos. NUNCA pases a pago en esta fase.*\n\n" +
-                    "2. FASE 'CONCILIACION': Se activa ÚNICAMENTE cuando los datos de entrega (Nombre completo, DNI, Teléfono, Departamento, Provincia, Distrito, Dirección exacta, Referencias) estén COMPLETOS en el historial o en el mensaje actual.\n" +
-                    "   - Confirmar que los datos de entrega fueron registrados.\n" +
-                    "   - Indicar el monto total exacto del pedido.\n" +
-                    "   - En tu 'respuestaSugerida', guiar al cliente para que realice el pago indicando el método que prefiera (Yape, Plin o Transferencia).\n" +
-                    "   *REGLA DE PAGO OBLIGATORIA: Si se envían las instrucciones de Yape o Plin, la 'respuestaSugerida' DEBE incluir de forma obligatoria y explícita que el número celular para realizar el abono por Yape o Plin es " + formattedCorpNum + ".*\n" +
-                    "   - Solicitar amablemente que envíe la captura o voucher del pago por este chat.\n\n" +
-                    "REGLA DE RESPUESTA SUGERIDA Y CONTROL DE DECISIÓN DE PEDIDOS EN LA BD:\n" +
-                    " - INTENCIÓN DE PEDIDO (intencionPedido):\n" +
-                    "   * 'NUEVO': El cliente indica explícitamente que desea iniciar un pedido nuevo/separado/independiente (ej. 'quiero un pedido nuevo', 'hazme otro pedido', 'quiero comprar aparte', 'opción 2', 'nuevo').\n" +
-                    "   * 'CONTINUAR': El cliente indica explícitamente que desea modificar o proceder con su pedido pendiente previo (ej. 'continúa el anterior', 'quiero el pedido anterior', 'agrégalo a mi pedido', 'modifica el anterior', 'opción 1', 'continuar').\n" +
-                    "   * 'DECISION_PENDIENTE': Existe un pedido PENDIENTE activo (<24h) y el cliente solicita productos o responde de forma ambigua ('sí', 'ya', 'está bien', etc.) SIN haber aclarado explícitamente si desea continuar el pedido anterior o crear uno nuevo.\n" +
-                    "   * 'NINGUNO': No aplica o es una consulta general.\n" +
-                    " - REGLA OBLIGATORIA PARA INTENCIÓN CONTINUAR: Cuando intencionPedido sea CONTINUAR, datosPedidoSuperficial.productos debe contener ÚNICAMENTE los productos NUEVOS solicitados en la última interacción del cliente. NO incluyas productos que ya pertenecían al pedido anterior salvo que el cliente haya solicitado agregar más unidades de esos mismos productos.\n" +
-                    " - SI existe un PEDIDO ANTERIOR EXPIRADO POR INACTIVIDAD (+24 HORAS), dicho pedido pasó a RECHAZADO y YA NO ES ACTIVO. NO intentes continuar ese pedido ni mezclar sus productos con la nueva solicitud. Procesa la solicitud actual del cliente como un NUEVO PEDIDO independiente.\n" +
-                    " - SI el cliente está respondiendo a una oferta de REEMPLAZO por producto agotado (ej. 'Por taza nube', 'cámbialo por...', o indica cantidad tras pregunta de reemplazo), PROHIBIDO asignar 'DECISION_PENDIENTE'. Es una modificación del pedido pendiente activo.\n" +
-                    " - SI el estado del pedido es 'PENDIENTE' y el cliente ya envió un voucher ('[VOUCHER]'), la 'respuestaSugerida' DEBE indicar que el comprobante está en proceso de validación por el equipo.\n" +
-                    " - SI el estado del pedido es 'VALIDADO', redactarás una confirmación feliz de que el pago fue validado por el administrador y que el pedido se está preparando para su despacho. NO solicitarás dirección, pago ni comprobante nuevamente.\n" +
-                    " - SI el estado del pedido es 'RECHAZADO' por un motivo real de comprobante, redactarás un mensaje amable alertando al cliente sobre la discrepancia en el comprobante o pago, solicitándole revisar o enviar nuevamente el comprobante sin reiniciar el pedido comercial.\n\n";
-                    
-            systemPrompt += "Debes retornar UNICAMENTE un objeto JSON de salida:\n" +
-                    "{\n" +
-                    "  \"fasePedido\": \"INICIAL\" | \"CONCILIACION\" | \"RECLAMO_CONSULTA\",\n" +
-                    "  \"intencionPedido\": \"NUEVO\" | \"CONTINUAR\" | \"DECISION_PENDIENTE\" | \"NINGUNO\",\n" +
-                    "  \"datosPedidoSuperficial\": {\n" +
-                    "    \"productos\": [\n" +
-                    "      {\n" +
-                    "        \"productoNombre\": string o null,\n" +
-                    "        \"cantidad\": int o null,\n" +
-                    "        \"precioUnitario\": double o null,\n" +
-                    "        \"subtotal\": double o null\n" +
-                    "      }\n" +
-                    "    ],\n" +
-                    "    \"totalEsperado\": double o null\n" +
-                    "  },\n" +
-                    "  \"datosConciliacion\": {\n" +
-                    "    \"nombreCompleto\": string o null,\n" +
-                    "    \"dni\": string o null,\n" +
-                    "    \"telefono\": string o null,\n" +
-                    "    \"departamento\": string o null,\n" +
-                    "    \"provincia\": string o null,\n" +
-                    "    \"distrito\": string o null,\n" +
-                    "    \"direccionExacta\": string o null,\n" +
-                    "    \"referencia\": string o null,\n" +
-                    "    \"direccionEntrega\": string o null,\n" +
-                    "    \"telefonoContacto\": string o null,\n" +
-                    "    \"variantesEspecificas\": string o null\n" +
-                    "  },\n" +
-                    "  \"totalEsperado\": double o null,\n" +
-                    "  \"pedidoIdentificado\": boolean,\n" +
-                    "  \"direccionDetectada\": boolean,\n" +
-                    "  \"datosCompletos\": boolean,\n" +
-                    "  \"prioridad\": \"ALTA\" | \"INTERMEDIA\" | \"BAJA\",\n" +
-                    "  \"pedidoReferenciadoId\": Long o null,\n" +
-                    "  \"respuestaSugerida\": string\n" +
-                    "}";
-
-            // Construir el body del request a OpenAI usando Jackson y formateando nativamente
-            ObjectNode requestBody = objectMapper.createObjectNode();
-            requestBody.put("model", "gpt-4o-mini");
-            
-            ArrayNode messagesArray = objectMapper.createArrayNode();
-            
-            // 1. System Message Principal
-            ObjectNode systemMessage = objectMapper.createObjectNode();
-            systemMessage.put("role", "system");
-            systemMessage.put("content", systemPrompt);
-            messagesArray.add(systemMessage);
-            
-            // 2. System Message de Contexto de Compras, Cliente, Stock Real y Vouchers
-            String estadoPedidoPendiente = "NINGUNO";
-            String resultadoOcrPendiente = "NINGUNO";
-            double totalPedido = 0.0;
-            double montoOcr = 0.0;
-            double diferenciaMonto = 0.0;
-            StringBuilder bloqueVouchers = new StringBuilder();
-            String estadoFinancieroBD = "SIN PEDIDO PENDIENTE";
-
-            if (pedidoPendienteActivo != null) {
-                estadoPedidoPendiente = pedidoPendienteActivo.getEstado();
-                String resBD = pedidoPendienteActivo.getResultadoConciliacion();
-                if (resBD != null && (resBD.contains("NUEVO PEDIDO") || resBD.contains("INACTIVIDAD") || resBD.contains("EXPIRADO"))) {
-                    resultadoOcrPendiente = "NINGUNO (Cierre comercial/expiración anterior - NO es rechazo de voucher)";
-                } else {
-                    resultadoOcrPendiente = resBD != null ? resBD : "Sin resultado";
-                }
-                totalPedido = pedidoPendienteActivo.getTotal() != null ? pedidoPendienteActivo.getTotal() : 0.0;
-                Double sumBD = pagoVoucherRepository.obtenerMontoTotalPagadoPorPedido(pedidoPendienteActivo.getId());
-                montoOcr = sumBD != null ? sumBD : (pedidoPendienteActivo.getMontoOcr() != null ? pedidoPendienteActivo.getMontoOcr() : 0.0);
-                diferenciaMonto = totalPedido - montoOcr;
-
-                List<PagoVoucher> listaVouchers = pagoVoucherRepository.findByPedidoIdOrderByFechaPagoAsc(pedidoPendienteActivo.getId());
-                if (listaVouchers != null && !listaVouchers.isEmpty()) {
-                    for (int i = 0; i < listaVouchers.size(); i++) {
-                        PagoVoucher v = listaVouchers.get(i);
-                        bloqueVouchers.append(String.format(" - Voucher %d: S/ %.2f (Ref: %s)\n",
-                                i + 1, v.getMonto() != null ? v.getMonto() : 0.0,
-                                v.getReferencia() != null ? v.getReferencia() : "Sin ref"));
-                    }
-                } else {
-                    bloqueVouchers.append(" - Ningún voucher registrado aún\n");
-                }
-
-                if (Math.abs(diferenciaMonto) < 0.01 || diferenciaMonto <= 0.0) {
-                    if (diferenciaMonto < -0.01) {
-                        estadoFinancieroBD = "SOBREPAGO (Monto pagado excede por S/ " + String.format("%.2f", Math.abs(diferenciaMonto)) + ")";
-                    } else {
-                        estadoFinancieroBD = "COMPLETAMENTE PAGADO";
-                    }
-                } else {
-                    estadoFinancieroBD = "PAGO PARCIAL (Saldo pendiente: S/ " + String.format("%.2f", diferenciaMonto) + ")";
-                }
-            }
-
-            ObjectNode contextMessage = objectMapper.createObjectNode();
-            contextMessage.put("role", "system");
-            contextMessage.put("content", "INFORMACIÓN DEL CLIENTE Y CONTEXTO DE COMPRAS PREVIAS:\n" +
-                    "Nombre: " + chat.getNombreCliente() + "\n" +
-                    "Teléfono: " + telefono + "\n" +
-                    "¿Tiene pedido pendiente previo activo actualmente?: " + (tienePedidoPendiente ? "SÍ (ID: " + pedidoPendienteActivo.getId() + ")" : "NO") + "\n" +
-                    "ESTADO ACTUAL DEL PEDIDO PENDIENTE EN BASE DE DATOS: " + (tienePedidoPendiente ? estadoPedidoPendiente : "NINGUNO") + "\n" +
-                    "\nESTADO REAL DE PAGOS:\n" +
-                    "Pedido total: S/ " + String.format("%.2f", totalPedido) + "\n" +
-                    "Vouchers registrados:\n" + bloqueVouchers.toString() +
-                    "Total pagado acumulado: S/ " + String.format("%.2f", montoOcr) + "\n" +
-                    "Saldo pendiente: S/ " + String.format("%.2f", diferenciaMonto) + "\n" +
-                    "Estado financiero: " + estadoFinancieroBD + "\n\n" +
-                    "RESULTADO OCR CONCILIACIÓN DEL PEDIDO PENDIENTE: " + resultadoOcrPendiente + "\n" +
-                    "CONTEXTO CONVERSACIONAL DE INTERACCIÓN ANTERIOR: " + (chat.getContextoInmediato() != null ? chat.getContextoInmediato() : "NINGUNO") + "\n\n" +
-                    contextoStock.toString() + "\n" +
-                    contextoPedidos.toString());
-            messagesArray.add(contextMessage);
-            
-            // 3. Mensajes del Historial
-            for (Mensaje msg : historial) {
-                ObjectNode msgNode = objectMapper.createObjectNode();
-                String role = "user";
-                if ("ADMINISTRADOR".equalsIgnoreCase(msg.getRemitente())) {
-                    role = "assistant";
-                }
-                msgNode.put("role", role);
-                String cont = msg.getContenido();
-                if (cont != null) {
-                    if (cont.contains("data:image/") || cont.contains("[VOUCHER]")) {
-                        // Si el voucher fue enviado ANTES de la creación del pedido activo actual, etiquetarlo como histórico cerrado
-                        boolean esVoucherHistoricoCerrado = false;
-                        if (pedidoPendienteActivo != null && pedidoPendienteActivo.getFecha() != null && msg.getFechaEnvio() != null) {
-                            if (msg.getFechaEnvio().isBefore(pedidoPendienteActivo.getFecha().minusSeconds(5))) {
-                                esVoucherHistoricoCerrado = true;
-                            }
-                        } else if (pedidoPendienteActivo == null) {
-                            esVoucherHistoricoCerrado = true;
-                        }
-
-                        if (esVoucherHistoricoCerrado) {
-                            cont = "[Comprobante de compra anterior ya cerrada y finalizada - NO aplica para el pedido actual]";
-                        } else {
-                            cont = "[VOUCHER / Comprobante de pago enviado por el cliente para el pedido actual]";
-                        }
-                    } else if (cont.length() > 1000) {
-                        cont = cont.substring(0, 1000) + "...";
-                    }
-                }
-                msgNode.put("content", cont != null ? cont : "");
-                messagesArray.add(msgNode);
-            }
-            
-            requestBody.set("messages", messagesArray);
-
-            // Forzar respuesta en formato JSON
-            ObjectNode responseFormat = objectMapper.createObjectNode();
-            responseFormat.put("type", "json_object");
-            requestBody.set("response_format", responseFormat);
-
-            HttpEntity<String> entity = new HttpEntity<>(objectMapper.writeValueAsString(requestBody), headers);
-
-            log.info("[OpenAI Service] Enviando petición a OpenAI con memoria nativa de {} mensajes e inventario real...", historial.size());
-            String responseStr = restTemplate.postForObject(apiUrl, entity, String.class);
-
-            if (responseStr != null) {
-                JsonNode responseJson = objectMapper.readTree(responseStr);
-                String contentResult = responseJson.path("choices").get(0).path("message").path("content").asText();
-                log.info("[OpenAI Service] Respuesta recibida de OpenAI: {}", contentResult);
-
-                // Parsear el JSON devuelto por OpenAI
-                JsonNode aiResult = objectMapper.readTree(contentResult);
-                
-                String fasePedido = aiResult.path("fasePedido").asText("INICIAL");
-                String intencionOpenAi = aiResult.path("intencionPedido").asText("NINGUNO").trim().toUpperCase();
-                JsonNode datosPedidoSuperficial = aiResult.path("datosPedidoSuperficial");
-                JsonNode datosConciliacion = aiResult.path("datosConciliacion");
-
-                // CONTROL ESTRUCTURAL DE DIRECCIÓN Y FASE DE PAGO
-                String nomComp = getSafeString(datosConciliacion, "nombreCompleto");
-                String dniVal = getSafeString(datosConciliacion, "dni");
-                String telVal = getSafeString(datosConciliacion, "telefono");
-                if (telVal.isEmpty()) telVal = getSafeString(datosConciliacion, "telefonoContacto");
-                String depto = getSafeString(datosConciliacion, "departamento");
-                String prov = getSafeString(datosConciliacion, "provincia");
-                String dist = getSafeString(datosConciliacion, "distrito");
-                String dirEx = getSafeString(datosConciliacion, "direccionExacta");
-                String ref = getSafeString(datosConciliacion, "referencia");
-                if (ref.isEmpty()) ref = getSafeString(datosConciliacion, "referencias");
-
-                boolean tiene8Campos = !nomComp.isEmpty() && !dniVal.isEmpty() && !telVal.isEmpty() &&
-                        !depto.isEmpty() && !prov.isEmpty() && !dist.isEmpty() && !dirEx.isEmpty() && !ref.isEmpty();
-                boolean tiene5Campos = tiene8Campos || (!depto.isEmpty() && !prov.isEmpty() && !dist.isEmpty() && !dirEx.isEmpty() && !ref.isEmpty());
-
-                boolean direccionEnBD = false;
-                if (pedidoPendienteActivo != null) {
-                    String dirEnt = pedidoPendienteActivo.getDireccionEntrega();
-                    String dirEnv = pedidoPendienteActivo.getDireccionEnvio();
-                    if (dirEnt != null && !dirEnt.trim().isEmpty()) {
-                        direccionEnBD = true;
-                    } else if (dirEnv != null && !dirEnv.trim().isEmpty()) {
-                        direccionEnBD = true;
-                    }
-                }
-
-                boolean mensajeTieneDireccion = mensajeEntrante != null && 
-                    (mensajeEntrante.toLowerCase().contains("departamento") || 
-                     mensajeEntrante.toLowerCase().contains("distrito") || 
-                     mensajeEntrante.toLowerCase().contains("provincia") || 
-                     mensajeEntrante.toLowerCase().contains("dirección") || 
-                     mensajeEntrante.toLowerCase().contains("dir:"));
-
-                boolean esVoucher = mensajeEntrante != null && (mensajeEntrante.contains("[VOUCHER]") || mensajeEntrante.contains("data:image/") || mensajeEntrante.contains("[DOCUMENTO]"));
-
-                // CORRECCIÓN: pedidoVinculado SOLO puede apuntar a un pedido en estado PENDIENTE o EN REVISION.
-                // Pedidos VALIDADO y RECHAZADO están cerrados y NO deben usarse como referencia activa.
-                Pedido pedidoVinculado = null;
-                if (chat.getPedidoReferenciadoId() != null) {
-                    Pedido candidato = pedidoRepository.findById(chat.getPedidoReferenciadoId()).orElse(null);
-                    // Solo usar el pedido referenciado si sigue siendo PENDIENTE o EN REVISION
-                    if (candidato != null && ("PENDIENTE".equalsIgnoreCase(candidato.getEstado()) || "EN REVISION".equalsIgnoreCase(candidato.getEstado()))) {
-                        pedidoVinculado = candidato;
-                    } else if (candidato != null) {
-                        log.info("[OpenAI Service] pedidoReferenciadoId {} apunta a un pedido en estado '{}' (cerrado/no activo). Se ignora como referencia activa.",
-                                chat.getPedidoReferenciadoId(), candidato.getEstado());
-                    }
-                }
-                if (pedidoVinculado == null && pedidoPendienteActivo != null) {
-                    pedidoVinculado = pedidoPendienteActivo;
-                }
-                // El fallback solo busca pedidos PENDIENTE o EN REVISION (< 24h)
-                if (pedidoVinculado == null && pedidosCliente != null && !pedidosCliente.isEmpty()) {
-                    for (int idx = pedidosCliente.size() - 1; idx >= 0; idx--) {
-                        Pedido p = pedidosCliente.get(idx);
-                        // IGNORAR completamente pedidos VALIDADO y RECHAZADO
-                        if ("PENDIENTE".equalsIgnoreCase(p.getEstado()) || "EN REVISION".equalsIgnoreCase(p.getEstado())) {
-                            LocalDateTime f = p.getFecha() != null ? p.getFecha() : ahoraLima;
-                            long hrs = java.time.Duration.between(f, ahoraLima).toHours();
-                            if (hrs < 24) {
-                                pedidoVinculado = p;
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                boolean ultimoMensajeEsVoucher = false;
-                boolean clienteEnvioVoucherReciente = false;
-
-                // REGLA ESTRICTA DE AISLAMIENTO DE VOUCHERS POR PEDIDO:
-                // Un comprobante de pago de historial SOLO es válido si existe un pedido activo (PENDIENTE o EN REVISION)
-                // y el mensaje del voucher fue enviado DURANTE o DESPUÉS de la creación de dicho pedido activo.
-                // Si el mensaje fue enviado antes de la creación del pedido activo (pertenece a un pedido anterior ya VALIDADO/RECHAZADO),
-                // o si no existe ningún pedido activo, DEBE SER IGNORADO POR COMPLETO.
-                if (pedidoVinculado != null && ("PENDIENTE".equalsIgnoreCase(pedidoVinculado.getEstado()) || "EN REVISION".equalsIgnoreCase(pedidoVinculado.getEstado()))) {
-                    LocalDateTime fechaInicioPedido = pedidoVinculado.getFecha() != null ? pedidoVinculado.getFecha().minusSeconds(5) : ahoraLima.minusHours(24);
-                    if (historial != null && !historial.isEmpty()) {
-                        for (int i = historial.size() - 1; i >= 0; i--) {
-                            Mensaje m = historial.get(i);
-                            if ("CLIENTE".equalsIgnoreCase(m.getRemitente()) && m.getContenido() != null) {
-                                LocalDateTime fMsg = m.getFechaEnvio() != null ? m.getFechaEnvio() : ahoraLima;
-                                if (!fMsg.isBefore(fechaInicioPedido)) {
-                                    String cont = m.getContenido();
-                                    if (cont.contains("[VOUCHER]") || cont.contains("data:image/") || cont.contains("[DOCUMENTO]")) {
-                                        clienteEnvioVoucherReciente = true;
-                                        if (!ultimoMensajeEsVoucher) {
-                                            ultimoMensajeEsVoucher = true;
+                        boolean ultimoMensajeEsVoucher = false;
+                        boolean clienteEnvioVoucherReciente = false;
+                        if (pedidoVinculado != null && ("PENDIENTE".equalsIgnoreCase(pedidoVinculado.getEstado()) || "EN REVISION".equalsIgnoreCase(pedidoVinculado.getEstado()))) {
+                            LocalDateTime fechaInicioPedido = pedidoVinculado.getFecha() != null ? pedidoVinculado.getFecha().minusSeconds(5) : ctx.ahoraLima.minusHours(24);
+                            if (ctx.historial != null && !ctx.historial.isEmpty()) {
+                                for (int i = ctx.historial.size() - 1; i >= 0; i--) {
+                                    Mensaje m = ctx.historial.get(i);
+                                    if ("CLIENTE".equalsIgnoreCase(m.getRemitente()) && m.getContenido() != null) {
+                                        LocalDateTime fMsg = m.getFechaEnvio() != null ? m.getFechaEnvio() : ctx.ahoraLima;
+                                        if (!fMsg.isBefore(fechaInicioPedido)) {
+                                            String cont = m.getContenido();
+                                            if (cont.contains("[VOUCHER]") || cont.contains("data:image/") || cont.contains("[DOCUMENTO]")) {
+                                                clienteEnvioVoucherReciente = true;
+                                                if (!ultimoMensajeEsVoucher) {
+                                                    ultimoMensajeEsVoucher = true;
+                                                }
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
-                    }
-                }
 
-                boolean tieneVouchersRegistrados = false;
-                if (pedidoVinculado != null && ("PENDIENTE".equalsIgnoreCase(pedidoVinculado.getEstado()) || "EN REVISION".equalsIgnoreCase(pedidoVinculado.getEstado())) && !esSolicitudDeProductos) {
-                    Double sumVouchers = pagoVoucherRepository.obtenerMontoTotalPagadoPorPedido(pedidoVinculado.getId());
-                    if ((sumVouchers != null && sumVouchers > 0.0) ||
-                        (pedidoVinculado.getVoucherUrl() != null && !pedidoVinculado.getVoucherUrl().trim().isEmpty()) ||
-                        (pedidoVinculado.getMontoOcr() != null && pedidoVinculado.getMontoOcr() > 0.0) ||
-                        "PAGO_COMPLETO".equalsIgnoreCase(pedidoVinculado.getEstadoPago())) {
-                        tieneVouchersRegistrados = true;
-                    }
-                }
-                boolean contextoEsVoucher = !esSolicitudDeProductos && (esVoucher || ultimoMensajeEsVoucher || clienteEnvioVoucherReciente || tieneVouchersRegistrados);
+                        boolean tieneVouchersRegistrados = false;
+                        if (pedidoVinculado != null && ("PENDIENTE".equalsIgnoreCase(pedidoVinculado.getEstado()) || "EN REVISION".equalsIgnoreCase(pedidoVinculado.getEstado())) && !ctx.esSolicitudDeProductos) {
+                            Double sumVouchers = pagoVoucherRepository.obtenerMontoTotalPagadoPorPedido(pedidoVinculado.getId());
+                            if ((sumVouchers != null && sumVouchers > 0.0) ||
+                                (pedidoVinculado.getVoucherUrl() != null && !pedidoVinculado.getVoucherUrl().trim().isEmpty()) ||
+                                (pedidoVinculado.getMontoOcr() != null && pedidoVinculado.getMontoOcr() > 0.0) ||
+                                "PAGO_COMPLETO".equalsIgnoreCase(pedidoVinculado.getEstadoPago())) {
+                                tieneVouchersRegistrados = true;
+                            }
+                        }
+                        boolean contextoEsVoucher = !ctx.esSolicitudDeProductos && (esVoucher || ultimoMensajeEsVoucher || clienteEnvioVoucherReciente || tieneVouchersRegistrados);
 
-                // REGLA ESTRICTA DE AISLAMIENTO DE DIRECCIÓN:
-                // Si es carrito inicial (creación de 1er pendiente), la dirección siempre es FALSE.
-                // Si ya existe un pedido pendiente activo, solo se acepta si ya está en BD o si fue enviada en el mensaje actual
-                // o durante el ciclo de vida de este pedido activo.
-                boolean tieneDireccionValidaActual = false;
-                if (!esCarritoInicial) {
-                    if (direccionEnBD) {
-                        tieneDireccionValidaActual = true;
-                    } else if (tiene5Campos) {
-                        if (mensajeTieneDireccion) {
-                            tieneDireccionValidaActual = true;
-                        } else if (pedidoPendienteActivo != null && historial != null) {
-                            LocalDateTime fechaPedido = pedidoPendienteActivo.getFecha() != null ? pedidoPendienteActivo.getFecha().minusSeconds(5) : ahoraLima.minusHours(24);
-                            for (Mensaje m : historial) {
-                                if ("CLIENTE".equalsIgnoreCase(m.getRemitente()) && m.getFechaEnvio() != null && !m.getFechaEnvio().isBefore(fechaPedido)) {
-                                    String cLow = m.getContenido() != null ? m.getContenido().toLowerCase() : "";
-                                    if (cLow.contains("departamento") || cLow.contains("distrito") || cLow.contains("provincia") || cLow.contains("dirección") || cLow.contains("dir:")) {
-                                        tieneDireccionValidaActual = true;
-                                        break;
+                        boolean tieneDireccionValidaActual = false;
+                        if (!ctx.esCarritoInicial) {
+                            if (direccionEnBD) {
+                                tieneDireccionValidaActual = true;
+                            } else if (direccionValida) {
+                                tieneDireccionValidaActual = true;
+                            } else if (tiene5Campos && mensajeTieneDireccion) {
+                                tieneDireccionValidaActual = true;
+                            } else if (pedidoPendienteActivo != null && ctx.historial != null) {
+                                LocalDateTime fechaPedido = pedidoPendienteActivo.getFecha() != null ? pedidoPendienteActivo.getFecha().minusSeconds(5) : ctx.ahoraLima.minusHours(24);
+                                for (Mensaje m : ctx.historial) {
+                                    if ("CLIENTE".equalsIgnoreCase(m.getRemitente()) && m.getFechaEnvio() != null && !m.getFechaEnvio().isBefore(fechaPedido)) {
+                                        String cNorm = m.getContenido() != null ? java.text.Normalizer.normalize(m.getContenido().toLowerCase(), java.text.Normalizer.Form.NFD).replaceAll("\\p{InCombiningDiacriticalMarks}+", "") : "";
+                                        if (cNorm.contains("departamento") || cNorm.contains("dpto") || cNorm.contains("distrito") || cNorm.contains("provincia") || cNorm.contains("direccion") || cNorm.contains("dir:") || cNorm.contains("calle") || cNorm.contains("av") || cNorm.contains("jr")) {
+                                            tieneDireccionValidaActual = true;
+                                            break;
+                                        }
                                     }
                                 }
                             }
                         }
-                    }
-                }
 
-                boolean direccionCompletaDefinitiva = tieneDireccionValidaActual;
-                boolean algunaDireccionDetectada = tieneDireccionValidaActual || (!esCarritoInicial && mensajeTieneDireccion);
+                        // Comprobación de campos faltantes (Regla antirretorno)
+                        List<String> camposFaltantes = new ArrayList<>();
+                        if (nomComp.isEmpty() && (chat.getNombreCliente() == null || chat.getNombreCliente().trim().isEmpty() || "Cliente".equalsIgnoreCase(chat.getNombreCliente()))) {
+                            camposFaltantes.add("nombre completo");
+                        }
+                        if (dniVal.isEmpty() && (pedidoPendienteActivo == null || pedidoPendienteActivo.getDni() == null || pedidoPendienteActivo.getDni().trim().isEmpty())) {
+                            camposFaltantes.add("DNI");
+                        }
+                        if (!direccionValida && !direccionEnBD) {
+                            if (!tieneCalle) camposFaltantes.add("dirección exacta (calle o avenida)");
+                            if (!tieneGeo) camposFaltantes.add("distrito o provincia");
+                        }
 
-                // VALIDACIÓN DETERMINISTA DE INTENCIÓN EN JAVA (SUPERVISA Y SOBRESCRIBE DE FORMA SEGURA A OPENAI)
-                String intencionJava = detectarDecisionPedidoExplicita(mensajeEntrante);
-                String intencionPedido = intencionOpenAi;
-                boolean solicitaProductosNuevos = datosPedidoSuperficial != null && datosPedidoSuperficial.path("productos").isArray() && datosPedidoSuperficial.path("productos").size() > 0;
+                        boolean envioDatosParciales = (mensajeTieneDireccion || direccionValida || !dniVal.isEmpty() || (!nomComp.isEmpty() && !"Cliente".equalsIgnoreCase(nomComp))) && !camposFaltantes.isEmpty();
+                        boolean direccionCompletaDefinitiva = (tieneDireccionValidaActual || direccionValida || direccionEnBD) && camposFaltantes.isEmpty();
+                        boolean algunaDireccionDetectada = tieneDireccionValidaActual || direccionValida || (!ctx.esCarritoInicial && mensajeTieneDireccion);
 
-                // Extraer productos para respuesta de confirmación de carrito
-                String textoProductosCarrito = "tu pedido";
-                if (datosPedidoSuperficial != null) {
-                    JsonNode prodsNode = datosPedidoSuperficial.path("productos");
-                    if (prodsNode.isArray() && prodsNode.size() > 0) {
-                        StringBuilder sbProds = new StringBuilder();
-                        for (int i = 0; i < prodsNode.size(); i++) {
-                            JsonNode pn = prodsNode.get(i);
-                            String pNom = pn.path("productoNombre").asText("");
-                            int pCant = pn.path("cantidad").asInt(1);
-                            if (pNom != null && !pNom.trim().isEmpty() && !"null".equalsIgnoreCase(pNom)) {
-                                if (sbProds.length() > 0) {
-                                    if (i == prodsNode.size() - 1) {
-                                        sbProds.append(" y ");
+                        String intencionJava = detectarDecisionPedidoExplicita(mensajeEntrante);
+                        String intencionPedido = intencionOpenAi;
+                        boolean solicitaProductosNuevos = datosPedidoSuperficial != null && datosPedidoSuperficial.path("productos").isArray() && datosPedidoSuperficial.path("productos").size() > 0;
+
+                        String textoProductosCarrito = "tu pedido";
+                        if (datosPedidoSuperficial != null) {
+                            JsonNode prodsNode = datosPedidoSuperficial.path("productos");
+                            if (prodsNode.isArray() && prodsNode.size() > 0) {
+                                StringBuilder sbProds = new StringBuilder();
+                                for (int i = 0; i < prodsNode.size(); i++) {
+                                    JsonNode pn = prodsNode.get(i);
+                                    String pNom = pn.path("productoNombre").asText("");
+                                    int pCant = pn.path("cantidad").asInt(1);
+                                    if (pNom != null && !pNom.trim().isEmpty() && !"null".equalsIgnoreCase(pNom)) {
+                                        if (sbProds.length() > 0) {
+                                            if (i == prodsNode.size() - 1) sbProds.append(" y ");
+                                            else sbProds.append(", ");
+                                        }
+                                        sbProds.append(pCant).append(" ").append(pNom.trim());
+                                    }
+                                }
+                                if (sbProds.length() > 0) textoProductosCarrito = sbProds.toString();
+                            }
+                        }
+                        if ("tu pedido".equals(textoProductosCarrito) && pedidoPendienteActivo != null && pedidoPendienteActivo.getVariantesEspecificas() != null) {
+                            textoProductosCarrito = pedidoPendienteActivo.getVariantesEspecificas();
+                        }
+
+                        StockCheckResult stockCheck = verificarStockPedido(datosPedidoSuperficial, mensajeEntrante, chat.getNombreCliente());
+                        if (stockCheck.isHayStockInsuficiente()) {
+                            log.warn("[OpenAI Service] ¡Alerta de Stock! Uno o más productos solicitados no tienen stock suficiente.");
+                        }
+
+                        boolean tienePendientePrevioReal = (ctx.cantidadPedidosPendientesPrevios >= 1 || (pedidoPendienteActivo != null && "PENDIENTE".equalsIgnoreCase(pedidoPendienteActivo.getEstado())));
+                        boolean estaRespondiendoDecision = "PREGUNTANDO_DECISION_PEDIDO".equals(chat.getContextoInmediato());
+
+                        if ("NUEVO".equalsIgnoreCase(intencionJava)) {
+                            intencionPedido = "NUEVO";
+                        } else if ("CONTINUAR".equalsIgnoreCase(intencionJava)) {
+                            intencionPedido = "CONTINUAR";
+                        } else if (estaRespondiendoDecision) {
+                            intencionPedido = "DECISION_PENDIENTE";
+                        } else if ("STOCK_INSUFICIENTE".equals(chat.getContextoInmediato()) ||
+                                   (chat.getContextoInmediato() != null && chat.getContextoInmediato().startsWith("ESPERANDO_CANTIDAD")) ||
+                                   "CONFIRMACION_REEMPLAZO".equals(chat.getContextoInmediato())) {
+                            intencionPedido = "CONTINUAR";
+                        } else if (ctx.esSolicitudDeProductos && tienePendientePrevioReal && !mensajeTieneDireccion) {
+                            log.info("[OpenAI Service] CASO B detectado: cliente con 1er Pendiente activo solicita productos nuevamente. Forzando DECISION_PENDIENTE.");
+                            intencionPedido = "DECISION_PENDIENTE";
+                        } else if (ctx.esCarritoInicial || ctx.esCompraNatural) {
+                            intencionPedido = "NUEVO";
+                            chat.setContextoInmediato(null);
+                        } else {
+                            if ("DECISION_PENDIENTE".equals(intencionOpenAi)) {
+                                intencionPedido = "NINGUNO";
+                            }
+                        }
+
+                        boolean pedidoIdentificado = aiResult.path("pedidoIdentificado").asBoolean(false);
+                        boolean direccionDetectada = aiResult.path("direccionDetectada").asBoolean(false);
+                        boolean datosCompletos = aiResult.path("datosCompletos").asBoolean(false);
+                        String prioridad = aiResult.path("prioridad").asText("BAJA");
+
+                        String respuestaSugerida = aiResult.path("respuestaSugerida").asText("");
+
+                        if (contextoEsVoucher) {
+                            fasePedido = "CONCILIACION";
+                            respuestaSugerida = "¡Muchas gracias por enviarnos tu comprobante! 🎉 Ya lo tenemos registrado y estamos finalizando la validación de tu pedido para proceder con la entrega.";
+                        } else if (direccionCompletaDefinitiva) {
+                            fasePedido = "CONCILIACION";
+                        } else if (envioDatosParciales && !ctx.esCarritoInicial) {
+                            // REGLA ANTIRRETORNO: Solicitar ÚNICAMENTE los campos faltantes específicos
+                            fasePedido = "INICIAL";
+                            chat.setContextoInmediato("SOLICITAR_DATOS_FALTANTES");
+                            String camposStr = String.join(", ", camposFaltantes);
+                            String nombreSaludo = (!nomComp.isEmpty() && !"Cliente".equalsIgnoreCase(nomComp)) ? nomComp : chat.getNombreCliente();
+                            respuestaSugerida = "¡Muchas gracias" + (nombreSaludo != null && !nombreSaludo.isEmpty() ? " " + nombreSaludo : "") + "! 😊 Ya tenemos registrados tus datos recibidos. Solo compártenos tu *" + camposStr + "* para poder finalizar tu pedido y proceder con el pago.";
+                        } else {
+                            fasePedido = "INICIAL";
+                            if (stockCheck.isHayStockInsuficiente()) {
+                                chat.setContextoInmediato("STOCK_INSUFICIENTE");
+                                prioridad = "ALTA";
+                                respuestaSugerida = stockCheck.getMensajeSugerido();
+                            } else if (ctx.esCarritoInicial) {
+                                chat.setContextoInmediato(null);
+                                respuestaSugerida = "¡Hola! Contamos con disponibilidad para " + textoProductosCarrito + " 😊. Para continuar, por favor, proporciona los siguientes datos de entrega:\n" +
+                                        PLANTILLA_DATOS_ENTREGA;
+                            }
+                            // NOTA: Eliminada sobreescritura forzosa de L964-969 que destruía la respuesta de OpenAI
+                        }
+
+                        // 5. Aplicar lógica de base de datos e inserción real en Pedido y PedidoDetalle
+                        if (contextoEsVoucher) {
+                            log.info("[OpenAI Service] Mensaje o contexto de comprobante/voucher detectado.");
+                            fasePedido = "CONCILIACION";
+                            chat.setDatosCompletos(true);
+                            chat.setContextoInmediato(null);
+                            if (pedidoVinculado != null && "VALIDADO".equalsIgnoreCase(pedidoVinculado.getEstado())) {
+                                respuestaSugerida = "¡Tu pago ha sido validado con éxito! 🎉 Estamos preparando tu pedido para despacho. Te enviaremos el número de seguimiento en cuanto esté en camino. ¡Muchas gracias por tu compra! ❤️";
+                            } else {
+                                respuestaSugerida = "¡Muchas gracias por enviarnos tu comprobante! 🎉 Ya lo tenemos registrado y estamos finalizando la validación de tu pedido para proceder con la entrega.";
+                            }
+                        } else if (soloSugerencia) {
+                            log.info("[OpenAI Service] Modo soloSugerencia activado. Se omite mutación de Pedido y PedidoDetalle.");
+                            boolean tienePendienteActivo = (pedidoPendienteActivo != null);
+                            if (("DECISION_PENDIENTE".equals(intencionPedido) || "PREGUNTANDO_DECISION_PEDIDO".equals(chat.getContextoInmediato())) && tienePendienteActivo) {
+                                double totalAnterior = pedidoPendienteActivo.getTotal() != null ? pedidoPendienteActivo.getTotal() : 0.0;
+                                chat.setContextoInmediato("PREGUNTANDO_DECISION_PEDIDO");
+                                respuestaSugerida = "🛍️ Tienes un pedido pendiente de S/." + String.format("%.2f", totalAnterior) + ".\n\n" +
+                                        "Como acabas de solicitar otros productos, elige una opción:\n\n" +
+                                        "✏️ Escribe *CONTINUAR*\n" +
+                                        "Para AGREGAR los nuevos productos a tu pedido anterior. Se conservarán los productos que ya tenías y se actualizará el total de tu pedido.\n\n" +
+                                        "🆕 Escribe *NUEVO*\n" +
+                                        "Para CREAR UN PEDIDO COMPLETAMENTE NUEVO con los productos que acabas de solicitar. Tu pedido anterior se cerrará y NO se modificará.\n\n" +
+                                        "👉 Escribe *CONTINUAR* o *NUEVO*.";
+                            } else if (stockCheck.isHayStockInsuficiente()) {
+                                fasePedido = "INICIAL";
+                                chat.setContextoInmediato("STOCK_INSUFICIENTE");
+                                prioridad = "ALTA";
+                                respuestaSugerida = stockCheck.getMensajeSugerido();
+                            } else if (ctx.esCarritoInicial) {
+                                fasePedido = "INICIAL";
+                                chat.setContextoInmediato(null);
+                                respuestaSugerida = "¡Hola! Contamos con disponibilidad para " + textoProductosCarrito + " 😊. Para continuar, por favor, proporciona los siguientes datos de entrega:\n" +
+                                        PLANTILLA_DATOS_ENTREGA;
+                            } else if (tienePendienteActivo && direccionCompletaDefinitiva) {
+                                double totalRealBD = pedidoPendienteActivo.getTotal() != null ? pedidoPendienteActivo.getTotal() : 0.0;
+                                String totalRealStr = String.format("%.2f", totalRealBD);
+                                String vars = pedidoPendienteActivo.getVariantesEspecificas() != null ? pedidoPendienteActivo.getVariantesEspecificas() : "Productos de tu pedido";
+
+                                Double sumBD = pagoVoucherRepository.obtenerMontoTotalPagadoPorPedido(pedidoPendienteActivo.getId());
+                                double pagado = sumBD != null ? sumBD : (pedidoPendienteActivo.getMontoOcr() != null ? pedidoPendienteActivo.getMontoOcr() : 0.0);
+                                double saldo = totalRealBD - pagado;
+
+                                fasePedido = "CONCILIACION";
+                                chat.setDatosCompletos(true);
+                                chat.setContextoInmediato(null);
+                                if (saldo <= 0.01 && totalRealBD > 0.0) {
+                                    respuestaSugerida = "¡Gracias por tu pago! 🛍️ Hemos recibido y registrado el monto total de S/." + totalRealStr + " (" + vars + ") correspondiente a tu pedido. El pago está completo y será revisado por nuestro equipo para continuar con la preparación y despacho. ¡Muchas gracias por tu compra! ❤️";
+                                } else if (saldo > 0.01) {
+                                    if (pagado > 0.01) {
+                                        respuestaSugerida = "¡Hola " + chat.getNombreCliente() + "! 😊 Hemos registrado tu abono de S/." + String.format("%.2f", pagado) + " para tu pedido de " + vars + " (Total: S/." + totalRealStr + ").\n\n" +
+                                                "📍 Tus datos de envío ya están registrados.\n" +
+                                                "💳 Queda un saldo pendiente de S/." + String.format("%.2f", saldo) + ".\n\n" +
+                                                "Por favor, realiza el abono del saldo restante a Yape o Plin al número " + ctx.formattedCorpNum + " y envíanos la captura o voucher por aquí para completar tu pedido. ¡Gracias! 🙌";
                                     } else {
-                                        sbProds.append(", ");
+                                        respuestaSugerida = "¡Hola " + chat.getNombreCliente() + "! 😊 Tu pedido por un total de S/." + totalRealStr + " (" + vars + ") se encuentra registrado.\n\n" +
+                                                "📍 Tus datos de envío ya se encuentran registrados en el sistema.\n\n" +
+                                                "💳 Para proceder con el despacho, puedes realizar el pago de S/." + totalRealStr + " mediante Yape, Plin o Transferencia al número corporativo " + ctx.formattedCorpNum + ".\n\n" +
+                                                "📲 Por favor, envíanos la captura o voucher de pago por este chat para verificarlo. ¡Muchas gracias! 😊";
                                     }
                                 }
-                                sbProds.append(pCant).append(" ").append(pNom.trim());
+                            }
+                        } else {
+                            boolean tienePendienteActivo = (pedidoPendienteActivo != null);
+
+                            if ("DECISION_PENDIENTE".equals(intencionPedido) && tienePendienteActivo) {
+                                log.info("[OpenAI Service] Decisión de pedido pendiente activa para cliente con pedido ID {}.", pedidoPendienteActivo.getId());
+                                chat.setContextoInmediato("PREGUNTANDO_DECISION_PEDIDO");
+
+                                double totalAnterior = pedidoPendienteActivo.getTotal() != null ? pedidoPendienteActivo.getTotal() : 0.0;
+
+                                respuestaSugerida = "🛍️ Tienes un pedido pendiente de S/." + String.format("%.2f", totalAnterior) + ".\n\n" +
+                                        "Como acabas de solicitar otros productos, elige una opción:\n\n" +
+                                        "✏️ Escribe *CONTINUAR*\n" +
+                                        "Para AGREGAR los nuevos productos a tu pedido anterior. Se conservarán los productos que ya tenías y se actualizará el total de tu pedido.\n\n" +
+                                        "🆕 Escribe *NUEVO*\n" +
+                                        "Para CREAR UN PEDIDO COMPLETAMENTE NUEVO con los productos que acabas de solicitar. Tu pedido anterior se cerrará y NO se modificará.\n\n" +
+                                        "👉 Escribe *CONTINUAR* o *NUEVO*.";
+                            } else if ("PREGUNTANDO_DECISION_PEDIDO".equals(chat.getContextoInmediato()) && !"NUEVO".equals(intencionPedido) && !"CONTINUAR".equals(intencionPedido) && tienePendienteActivo) {
+                                log.info("[OpenAI Service] Mensaje ambiguo recibido durante PREGUNTANDO_DECISION_PEDIDO.");
+                                double totalAnterior = pedidoPendienteActivo.getTotal() != null ? pedidoPendienteActivo.getTotal() : 0.0;
+                                respuestaSugerida = "🛍️ Tienes un pedido pendiente de S/." + String.format("%.2f", totalAnterior) + ".\n\n" +
+                                        "Como acabas de solicitar otros productos, elige una opción:\n\n" +
+                                        "✏️ Escribe *CONTINUAR*\n" +
+                                        "Para AGREGAR los nuevos productos a tu pedido anterior. Se conservarán los productos que ya tenías y se actualizará el total de tu pedido.\n\n" +
+                                        "🆕 Escribe *NUEVO*\n" +
+                                        "Para CREAR UN PEDIDO COMPLETAMENTE NUEVO con los productos que acabas de solicitar. Tu pedido anterior se cerrará y NO se modificará.\n\n" +
+                                        "👉 Escribe *CONTINUAR* o *NUEVO*.";
+                            } else {
+                                Pedido pedidoExistente = null;
+                                boolean esFlujoContinuar = false;
+
+                                if ("NUEVO".equals(intencionPedido)) {
+                                    if (tienePendienteActivo && pedidoPendienteActivo != null && ctx.cantidadPedidosPendientesPrevios > 0) {
+                                        log.info("[OpenAI Service] Marcando pedido PENDIENTE anterior ID {} como RECHAZADO por creación de nuevo pedido.", pedidoPendienteActivo.getId());
+                                        pedidoPendienteActivo.setEstado("RECHAZADO");
+                                        pedidoPendienteActivo.setResultadoConciliacion("RECHAZADO POR CREACIÓN DE NUEVO PEDIDO");
+                                        pedidoRepository.save(pedidoPendienteActivo);
+                                    }
+
+                                    if (ctx.esCarritoInicial && pedidoPendienteActivo != null && ctx.cantidadPedidosPendientesPrevios == 0) {
+                                        log.info("[OpenAI Service] Carrito inicial recibido con pedido PENDIENTE ID {} ya iniciado para este carrito. Reutilizando pedido.", pedidoPendienteActivo.getId());
+                                        pedidoExistente = pedidoPendienteActivo;
+                                    } else {
+                                        pedidoExistente = new Pedido();
+                                        pedidoExistente.setEstado("PENDIENTE");
+                                        pedidoExistente.setEstadoPago("SIN_PAGO");
+                                        pedidoExistente.setMontoDetectado(0.0);
+                                        pedidoExistente.setDiferencia(0.0);
+                                        java.time.ZoneId zoneId = java.time.ZoneId.of("America/Lima");
+                                        pedidoExistente.setFecha(LocalDateTime.now(zoneId));
+                                        pedidoExistente.setNumeroOrden("WSP-" + System.currentTimeMillis());
+
+                                        Usuario cliente = usuarioRepository.findByTelefono(telefono).orElseGet(() -> {
+                                            Usuario nuevoCliente = new Usuario();
+                                            nuevoCliente.setTelefono(telefono);
+                                            nuevoCliente.setNombre(chat.getNombreCliente());
+                                            nuevoCliente.setEmail(telefono + "@puntoycoma.com");
+                                            nuevoCliente.setPassword("client_pass");
+                                            nuevoCliente.setRol("CLIENTE");
+                                            nuevoCliente.setActivo(true);
+                                            nuevoCliente.setHabilitado(true);
+                                            return usuarioRepository.save(nuevoCliente);
+                                        });
+                                        pedidoExistente.setUsuario(cliente);
+                                    }
+                                    chat.setContextoInmediato(null);
+                                } else if ("CONTINUAR".equals(intencionPedido) && tienePendienteActivo) {
+                                    log.info("[OpenAI Service] Intención CONTINUAR detectada explícitamente. Reutilizando pedido PENDIENTE ID {}.", pedidoPendienteActivo.getId());
+                                    pedidoExistente = pedidoPendienteActivo;
+                                    esFlujoContinuar = true;
+                                    chat.setContextoInmediato("NINGUNO");
+                                } else {
+                                    pedidoExistente = pedidoRepository.findFirstByUsuarioTelefonoAndEstado(telefono, "PENDIENTE");
+                                    if (pedidoExistente == null && solicitaProductosNuevos) {
+                                        log.info("[OpenAI Service] Registrando nuevo pedido PENDIENTE para el cliente.");
+                                        pedidoExistente = new Pedido();
+                                        pedidoExistente.setEstado("PENDIENTE");
+                                        pedidoExistente.setEstadoPago("SIN_PAGO");
+                                        pedidoExistente.setMontoDetectado(0.0);
+                                        pedidoExistente.setDiferencia(0.0);
+                                        java.time.ZoneId zoneId = java.time.ZoneId.of("America/Lima");
+                                        pedidoExistente.setFecha(LocalDateTime.now(zoneId));
+                                        pedidoExistente.setNumeroOrden("WSP-" + System.currentTimeMillis());
+
+                                        Usuario cliente = usuarioRepository.findByTelefono(telefono).orElseGet(() -> {
+                                            Usuario nuevoCliente = new Usuario();
+                                            nuevoCliente.setTelefono(telefono);
+                                            nuevoCliente.setNombre(chat.getNombreCliente());
+                                            nuevoCliente.setEmail(telefono + "@puntoycoma.com");
+                                            nuevoCliente.setPassword("client_pass");
+                                            nuevoCliente.setRol("CLIENTE");
+                                            nuevoCliente.setActivo(true);
+                                            nuevoCliente.setHabilitado(true);
+                                            return usuarioRepository.save(nuevoCliente);
+                                        });
+                                        pedidoExistente.setUsuario(cliente);
+                                    }
+                                }
+
+                                if (pedidoExistente != null) {
+                                    String direccionUnificada = "Dpto: " + depto + ", Prov: " + prov + ", Dist: " + dist + ", Dir: " + dirEx + ", Ref: " + ref;
+                                    boolean hasAddress = !depto.isEmpty() || !prov.isEmpty() || !dist.isEmpty() || !dirEx.isEmpty();
+                                    if (!hasAddress && direccionValida) {
+                                        hasAddress = true;
+                                    }
+
+                                    if (pedidoExistente.getId() == null && !esFlujoContinuar && !mensajeTieneDireccion && !direccionValida) {
+                                        log.info("[OpenAI Service] Desestimando dirección del historial antiguo para el nuevo pedido.");
+                                        hasAddress = false;
+                                    }
+
+                                    String finalNombreCompleto = nomComp;
+                                    if (finalNombreCompleto == null || finalNombreCompleto.trim().isEmpty() || "Admin Principal".equalsIgnoreCase(finalNombreCompleto)) {
+                                        finalNombreCompleto = (pedidoExistente.getNombreCompleto() != null && !pedidoExistente.getNombreCompleto().trim().isEmpty() && !"Admin Principal".equalsIgnoreCase(pedidoExistente.getNombreCompleto())) 
+                                                ? pedidoExistente.getNombreCompleto() : chat.getNombreCliente();
+                                    }
+                                    pedidoExistente.setNombreCompleto(finalNombreCompleto);
+                                    if (nomComp != null && !nomComp.trim().isEmpty() && !"Cliente".equalsIgnoreCase(nomComp) && !"Admin Principal".equalsIgnoreCase(nomComp)) {
+                                        chat.setNombreCliente(nomComp.trim());
+                                    }
+
+                                    if (!dniVal.isEmpty()) {
+                                        pedidoExistente.setDni(dniVal);
+                                    }
+
+                                    if (hasAddress) {
+                                        pedidoExistente.setDireccionEntrega(direccionUnificada);
+                                        pedidoExistente.setDireccionEnvio(direccionUnificada);
+                                    }
+                                    if (!telVal.isEmpty()) {
+                                        pedidoExistente.setTelefonoContacto(telVal);
+                                    }
+
+                                    double totalEsperado = aiResult.path("totalEsperado").asDouble(0.0);
+                                    if (totalEsperado <= 0.0 && datosPedidoSuperficial != null) {
+                                        totalEsperado = datosPedidoSuperficial.path("totalEsperado").asDouble(0.0);
+                                    }
+                                    if (totalEsperado > 0.0 && !esFlujoContinuar && pedidoExistente.getId() == null) {
+                                        pedidoExistente.setTotal(totalEsperado);
+                                    }
+
+                                    Pedido pedidoGuardado = pedidoRepository.save(pedidoExistente);
+                                    pedidoPendienteActivo = pedidoGuardado;
+
+                                    if ((hasAddress || direccionCompletaDefinitiva) && !ctx.esCarritoInicial) {
+                                        chat.setContextoInmediato(null);
+                                        chat.setDatosCompletos(true);
+                                        if (contextoEsVoucher) {
+                                            fasePedido = "CONCILIACION";
+                                            respuestaSugerida = "¡Muchas gracias por enviarnos tu comprobante! 🎉 Ya lo tenemos registrado y estamos finalizando la validación de tu pedido para proceder con la entrega.";
+                                        } else {
+                                            fasePedido = "CONCILIACION";
+                                            if (!esFlujoContinuar) {
+                                                double totalRealBD = pedidoGuardado.getTotal() != null ? pedidoGuardado.getTotal() : 0.0;
+                                                String totalRealStr = String.format("%.2f", totalRealBD);
+                                                String vars = pedidoGuardado.getVariantesEspecificas() != null ? pedidoGuardado.getVariantesEspecificas() : "Productos de tu pedido";
+
+                                                Double sumBD = pagoVoucherRepository.obtenerMontoTotalPagadoPorPedido(pedidoGuardado.getId());
+                                                double pagado = sumBD != null ? sumBD : (pedidoGuardado.getMontoOcr() != null ? pedidoGuardado.getMontoOcr() : 0.0);
+                                                double saldo = totalRealBD - pagado;
+
+                                                if (saldo <= 0.01 && totalRealBD > 0.0) {
+                                                    respuestaSugerida = "¡Gracias por tu pago! 🛍️ Hemos recibido y registrado el monto total de S/." + totalRealStr + " (" + vars + ") correspondiente a tu pedido. El pago está completo y será revisado por nuestro equipo para continuar con la preparación y despacho. ¡Muchas gracias por tu compra! ❤️";
+                                                } else if (saldo > 0.01) {
+                                                    if (pagado > 0.01) {
+                                                        respuestaSugerida = "¡Hola " + chat.getNombreCliente() + "! 😊 Hemos registrado tu abono de S/." + String.format("%.2f", pagado) + " para tu pedido de " + vars + " (Total: S/." + totalRealStr + ").\n\n" +
+                                                                "📍 Tus datos de envío ya están registrados.\n" +
+                                                                "💳 Queda un saldo pendiente de S/." + String.format("%.2f", saldo) + ".\n\n" +
+                                                                "Por favor, realiza el abono del saldo restante a Yape o Plin al número " + ctx.formattedCorpNum + " y envíanos la captura o voucher por aquí para completar tu pedido. ¡Gracias! 🙌";
+                                                    } else {
+                                                        respuestaSugerida = "¡Hola " + chat.getNombreCliente() + "! 😊 Tu pedido por un total de S/." + totalRealStr + " (" + vars + ") se encuentra registrado.\n\n" +
+                                                                "📍 Tus datos de envío ya se encuentran registrados en el sistema.\n\n" +
+                                                                "💳 Para proceder con el despacho, puedes realizar el pago de S/." + totalRealStr + " mediante Yape, Plin o Transferencia al número corporativo " + ctx.formattedCorpNum + ".\n\n" +
+                                                                "📲 Por favor, envíanos la captura o voucher de pago por este chat para verificarlo. ¡Muchas gracias! 😊";
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    // REGISTRO Y ACUMULACIÓN DE PEDIDO_DETALLE
+                                    boolean esMensajeDeDireccion = (mensajeTieneDireccion || tiene5Campos || direccionValida) && !ctx.esCarritoInicial;
+                                    JsonNode productosNode = datosPedidoSuperficial != null ? datosPedidoSuperficial.path("productos") : null;
+                                    if (!esMensajeDeDireccion && productosNode != null && productosNode.isArray() && productosNode.size() > 0) {
+                                        List<Producto> todosProductos = productoRepository.findAll();
+
+                                        if (!esFlujoContinuar && "NUEVO".equals(intencionPedido)) {
+                                            pedidoDetalleRepository.deleteByPedidoId(pedidoGuardado.getId());
+                                        }
+
+                                        List<PedidoDetalle> detallesExistentes = pedidoDetalleRepository.findByPedidoId(pedidoGuardado.getId());
+
+                                        StringBuilder sbTextosInteraccion = new StringBuilder();
+                                        if (mensajeEntrante != null) sbTextosInteraccion.append(mensajeEntrante).append(" ");
+                                        if (ctx.historial != null && !ctx.historial.isEmpty()) {
+                                            for (int idx = Math.max(0, ctx.historial.size() - 4); idx < ctx.historial.size(); idx++) {
+                                                Mensaje m = ctx.historial.get(idx);
+                                                if ("CLIENTE".equalsIgnoreCase(m.getRemitente()) && m.getContenido() != null) {
+                                                    sbTextosInteraccion.append(m.getContenido()).append(" ");
+                                                }
+                                            }
+                                        }
+                                        String textoInteraccionReciente = sbTextosInteraccion.toString().toLowerCase();
+
+                                        for (int i = 0; i < productosNode.size(); i++) {
+                                            JsonNode prodNode = productosNode.get(i);
+                                            String prodNombre = prodNode.path("productoNombre").asText(null);
+                                            int cantidadNueva = prodNode.path("cantidad").asInt(1);
+                                            double precioUnitario = prodNode.path("precioUnitario").asDouble(0.0);
+                                            if (cantidadNueva <= 0) cantidadNueva = 1;
+
+                                            if (prodNombre != null && !prodNombre.trim().isEmpty() && !"null".equalsIgnoreCase(prodNombre)) {
+                                                Producto productoMatcheado = null;
+                                                for (Producto p : todosProductos) {
+                                                    if (p.getNombre() != null && p.getNombre().toLowerCase().contains(prodNombre.toLowerCase())) {
+                                                        productoMatcheado = p;
+                                                        break;
+                                                    }
+                                                }
+                                                if (productoMatcheado == null && !todosProductos.isEmpty()) {
+                                                    productoMatcheado = todosProductos.get(0);
+                                                }
+
+                                                if (productoMatcheado != null) {
+                                                    final Long prodIdMatch = productoMatcheado.getId();
+                                                    PedidoDetalle detalleExistente = null;
+                                                    if (detallesExistentes != null) {
+                                                        for (PedidoDetalle d : detallesExistentes) {
+                                                            if (d.getProducto() != null && d.getProducto().getId().equals(prodIdMatch)) {
+                                                                detalleExistente = d;
+                                                                break;
+                                                            }
+                                                        }
+                                                    }
+
+                                                    if (detalleExistente != null && esFlujoContinuar) {
+                                                        boolean fueMencionadoRecientemente = false;
+                                                        String nombreMatcheadoLower = productoMatcheado.getNombre() != null ? productoMatcheado.getNombre().toLowerCase() : "";
+                                                        String prodNombreLower = prodNombre != null ? prodNombre.toLowerCase() : "";
+
+                                                        String[] palabras = nombreMatcheadoLower.split("[^a-záéíóúñ0-9]+");
+                                                        for (String pal : palabras) {
+                                                            if (pal.length() > 3 && !pal.equals("taza") && !pal.equals("tazas") && !pal.equals("para")) {
+                                                                if (textoInteraccionReciente.contains(pal)) {
+                                                                    fueMencionadoRecientemente = true;
+                                                                    break;
+                                                                }
+                                                            }
+                                                        }
+                                                        if (!fueMencionadoRecientemente && !nombreMatcheadoLower.isEmpty() && textoInteraccionReciente.contains(nombreMatcheadoLower)) {
+                                                            fueMencionadoRecientemente = true;
+                                                        }
+                                                        if (!fueMencionadoRecientemente && !prodNombreLower.isEmpty() && textoInteraccionReciente.contains(prodNombreLower)) {
+                                                            fueMencionadoRecientemente = true;
+                                                        }
+
+                                                        if (fueMencionadoRecientemente) {
+                                                            log.info("[OpenAI Service] Acumulando {} unidades adicionales para producto '{}' en pedido ID {}.",
+                                                                    cantidadNueva, productoMatcheado.getNombre(), pedidoGuardado.getId());
+                                                            detalleExistente.setCantidad(detalleExistente.getCantidad() + cantidadNueva);
+                                                            double precioFinal = precioUnitario > 0 ? precioUnitario : (productoMatcheado.getPrecio() != null ? productoMatcheado.getPrecio() : 0.0);
+                                                            detalleExistente.setPrecioUnitario(precioFinal);
+                                                            pedidoDetalleRepository.save(detalleExistente);
+                                                        }
+                                                    } else {
+                                                        PedidoDetalle detalle = new PedidoDetalle();
+                                                        detalle.setPedido(pedidoGuardado);
+                                                        detalle.setProducto(productoMatcheado);
+                                                        detalle.setCantidad(cantidadNueva);
+                                                        double precioFinal = precioUnitario > 0 ? precioUnitario : (productoMatcheado.getPrecio() != null ? productoMatcheado.getPrecio() : 0.0);
+                                                        detalle.setPrecioUnitario(precioFinal);
+                                                        pedidoDetalleRepository.save(detalle);
+                                                        if (detallesExistentes != null) {
+                                                            detallesExistentes.add(detalle);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        List<PedidoDetalle> todosDetallesGuardados = pedidoDetalleRepository.findByPedidoId(pedidoGuardado.getId());
+                                        double sumaTotales = 0.0;
+                                        StringBuilder sbVariantes = new StringBuilder();
+                                        for (PedidoDetalle d : todosDetallesGuardados) {
+                                            double pUnit = d.getPrecioUnitario() != null ? d.getPrecioUnitario() : (d.getProducto() != null && d.getProducto().getPrecio() != null ? d.getProducto().getPrecio() : 0.0);
+                                            int cant = d.getCantidad() != null ? d.getCantidad() : 1;
+                                            sumaTotales += (pUnit * cant);
+                                            if (sbVariantes.length() > 0) sbVariantes.append(", ");
+                                            sbVariantes.append(d.getProducto() != null ? d.getProducto().getNombre() : "Producto").append(" x").append(cant);
+                                        }
+
+                                        if (sumaTotales > 0.0) {
+                                            pedidoGuardado.setTotal(sumaTotales);
+                                        }
+                                        if (sbVariantes.length() > 0) {
+                                            pedidoGuardado.setVariantesEspecificas(sbVariantes.toString());
+                                        }
+                                        pedidoRepository.save(pedidoGuardado);
+                                        log.info("[DATABASE] PedidoDetalle acumulado para Pedido ID: {}. Total acumulado: S/ {}", pedidoGuardado.getId(), sumaTotales);
+
+                                        if (esFlujoContinuar && sumaTotales > 0.0) {
+                                            double totalParcialOpenAi = aiResult.path("totalEsperado").asDouble(0.0);
+                                            if (totalParcialOpenAi <= 0.0 && datosPedidoSuperficial != null) {
+                                                totalParcialOpenAi = datosPedidoSuperficial.path("totalEsperado").asDouble(0.0);
+                                            }
+                                            String totalRealStr = String.format("%.2f", sumaTotales);
+                                            if (totalParcialOpenAi > 0.0) {
+                                                String totalParcialStr = String.format("%.2f", totalParcialOpenAi);
+                                                String totalParcialIntStr = String.format("%.0f", totalParcialOpenAi);
+                                                if (respuestaSugerida != null && !respuestaSugerida.isEmpty()) {
+                                                    respuestaSugerida = respuestaSugerida.replace("S/." + totalParcialStr, "S/." + totalRealStr)
+                                                                                         .replace("S/ " + totalParcialStr, "S/ " + totalRealStr)
+                                                                                         .replace("S/." + totalParcialIntStr, "S/." + totalRealStr)
+                                                                                         .replace("S/ " + totalParcialIntStr, "S/ " + totalRealStr)
+                                                                                         .replace("S/" + totalParcialStr, "S/" + totalRealStr)
+                                                                                         .replace("S/" + totalParcialIntStr, "S/" + totalRealStr);
+                                                }
+                                            }
+
+                                            if (direccionCompletaDefinitiva) {
+                                                fasePedido = "CONCILIACION";
+                                                chat.setDatosCompletos(true);
+                                                respuestaSugerida = "¡Perfecto! Hemos agregado los nuevos productos a tu pedido anterior. Tu pedido total actualizado es de S/." + totalRealStr + " (" + sbVariantes.toString() + ").\n\n" +
+                                                        "📍 Tus datos de envío ya se encuentran registrados en el sistema.\n\n" +
+                                                        "💳 Para proceder con el despacho, puedes realizar el pago de S/." + totalRealStr + " mediante Yape, Plin o Transferencia al número corporativo " + ctx.formattedCorpNum + ".\n\n" +
+                                                        "📲 Por favor, envíanos la captura o voucher de pago por este chat para verificarlo. ¡Muchas gracias! 😊";
+                                            } else {
+                                                fasePedido = "INICIAL";
+                                                if (respuestaSugerida == null || !respuestaSugerida.contains(totalRealStr) || respuestaSugerida.contains(ctx.formattedCorpNum)) {
+                                                    respuestaSugerida = "¡Perfecto! Hemos agregado los nuevos productos a tu pedido anterior. Tu pedido total actualizado es de S/." + totalRealStr + " (" + sbVariantes.toString() + "). Por favor, indícanos tus datos de envío faltantes para finalizar la cotización.";
+                                                }
+                                            }
+                                        }
+                                        if (ctx.esCarritoInicial) {
+                                            String varsFinal = sbVariantes.length() > 0 ? sbVariantes.toString() : ctx.textoProductosCarrito;
+                                            fasePedido = "INICIAL";
+                                            chat.setContextoInmediato(null);
+                                            respuestaSugerida = "¡Hola! Contamos con disponibilidad para " + varsFinal + " 😊. Para continuar, por favor, proporciona los siguientes datos de entrega:\n" +
+                                                    PLANTILLA_DATOS_ENTREGA;
+                                        }
+                                    } else if (esMensajeDeDireccion) {
+                                        log.info("[OpenAI Service] Mensaje de datos de entrega detectado. Se preservan intactos los productos y total del pedido ID {}.", pedidoGuardado.getId());
+                                    }
+                                    log.info("[DATABASE] ¡ÉXITO! Registro de Pedido PENDIENTE procesado en base de datos.");
+                                }
                             }
                         }
-                        if (sbProds.length() > 0) {
-                            textoProductosCarrito = sbProds.toString();
+
+                        // Sanitizar respuesta sugerida si no corresponde a decisión de pedido pendiente
+                        if (ctx.esCarritoInicial || !ctx.tienePedidoPendiente || (!"DECISION_PENDIENTE".equals(intencionPedido) && !"PREGUNTANDO_DECISION_PEDIDO".equals(chat.getContextoInmediato()))) {
+                            if (respuestaSugerida != null && (respuestaSugerida.contains("Tienes un pedido pendiente") || respuestaSugerida.contains("pedido pendiente de"))) {
+                                log.warn("[OpenAI Service] Alerta de desincronización: OpenAI sugirió mensaje de pedido pendiente por arrastre de historial. Limpiando.");
+                                if (ctx.esCarritoInicial) {
+                                    String varsFinal = (pedidoPendienteActivo != null && pedidoPendienteActivo.getVariantesEspecificas() != null) ? pedidoPendienteActivo.getVariantesEspecificas() : ctx.textoProductosCarrito;
+                                    respuestaSugerida = "¡Hola! Contamos con disponibilidad para " + varsFinal + " 😊. Para continuar, por favor, proporciona los siguientes datos de entrega:\n" +
+                                            PLANTILLA_DATOS_ENTREGA;
+                                } else if (direccionCompletaDefinitiva && pedidoPendienteActivo != null) {
+                                    double totalRealBD = pedidoPendienteActivo.getTotal() != null ? pedidoPendienteActivo.getTotal() : 0.0;
+                                    String totalRealStr = String.format("%.2f", totalRealBD);
+                                    String vars = pedidoPendienteActivo.getVariantesEspecificas() != null ? pedidoPendienteActivo.getVariantesEspecificas() : "Productos de tu pedido";
+                                    respuestaSugerida = "¡Hola " + chat.getNombreCliente() + "! 😊 Tu pedido por un total de S/." + totalRealStr + " (" + vars + ") se encuentra registrado.\n\n" +
+                                            "📍 Tus datos de envío ya se encuentran registrados en el sistema.\n\n" +
+                                            "💳 Para proceder con el despacho, puedes realizar el pago de S/." + totalRealStr + " mediante Yape, Plin o Transferencia al número corporativo " + ctx.formattedCorpNum + ".\n\n" +
+                                            "📲 Por favor, envíanos la captura o voucher de pago por este chat para verificarlo. ¡Muchas gracias! 😊";
+                                } else {
+                                    respuestaSugerida = "¡Hola " + chat.getNombreCliente() + "! 😊 ¿En qué podemos ayudarte el día de hoy? Si deseas realizar una compra, por favor indícanos qué productos te gustaría cotizar.";
+                                }
+                            }
                         }
-                    }
-                }
-                if ("tu pedido".equals(textoProductosCarrito) && pedidoPendienteActivo != null && pedidoPendienteActivo.getVariantesEspecificas() != null) {
-                    textoProductosCarrito = pedidoPendienteActivo.getVariantesEspecificas();
-                }
 
-                // VERIFICACIÓN DETERMINISTA DE STOCK REAL EN BD:
-                StockCheckResult stockCheck = verificarStockPedido(datosPedidoSuperficial, mensajeEntrante, chat.getNombreCliente());
-                if (stockCheck.isHayStockInsuficiente()) {
-                    log.warn("[OpenAI Service] ¡Alerta de Stock! Uno o más productos solicitados no tienen stock suficiente. Forzando advertencia amigable de stock.");
-                }
+                        // 6. Actualizar la entidad Chat con los resultados semánticos e indicadores coherentes
+                        boolean finalPedidoId = (datosPedidoSuperficial != null && datosPedidoSuperficial.path("productos").isArray() && datosPedidoSuperficial.path("productos").size() > 0) || pedidoIdentificado || (pedidoPendienteActivo != null);
+                        boolean finalDireccionDet = algunaDireccionDetectada || direccionDetectada || direccionValida;
+                        boolean finalDatosComp = finalPedidoId && direccionCompletaDefinitiva;
 
-                // CORRECCIÓN — REGLA ESTRICTA CASO A vs CASO B:
-                // Si el cliente ya tiene un 1er Pendiente activo en BD y envía una nueva solicitud de productos
-                // (carrito web O frase natural), la intención DEBE ser DECISION_PENDIENTE (no NUEVO).
-                // Solo si NO tiene ningún pendiente activo, la solicitud de productos crea uno nuevo (CASO A).
-                boolean tienePendientePrevioReal = (cantidadPedidosPendientesPrevios >= 1 || (pedidoPendienteActivo != null && "PENDIENTE".equalsIgnoreCase(pedidoPendienteActivo.getEstado())));
-                boolean estaRespondiendoDecision = "PREGUNTANDO_DECISION_PEDIDO".equals(chat.getContextoInmediato());
+                        if (stockCheck.isHayStockInsuficiente()) {
+                            finalPedidoId = true;
+                            finalDireccionDet = false;
+                            finalDatosComp = false;
+                            fasePedido = "INICIAL";
+                            chat.setContextoInmediato("STOCK_INSUFICIENTE");
+                            prioridad = "ALTA";
+                            respuestaSugerida = stockCheck.getMensajeSugerido();
+                        } else if (ctx.esCarritoInicial && !"DECISION_PENDIENTE".equals(intencionPedido) && !"PREGUNTANDO_DECISION_PEDIDO".equals(chat.getContextoInmediato())) {
+                            finalPedidoId = true;
+                            if (!direccionCompletaDefinitiva && !algunaDireccionDetectada) {
+                                finalDireccionDet = false;
+                                finalDatosComp = false;
+                                fasePedido = "INICIAL";
+                                chat.setContextoInmediato(null);
+                            }
+                        }
 
-                if ("NUEVO".equalsIgnoreCase(intencionJava)) {
-                    intencionPedido = "NUEVO";
-                } else if ("CONTINUAR".equalsIgnoreCase(intencionJava)) {
-                    intencionPedido = "CONTINUAR";
-                } else if (estaRespondiendoDecision) {
-                    // Ya se preguntó CONTINUAR/NUEVO, el cliente responde de forma ambigua
-                    intencionPedido = "DECISION_PENDIENTE";
-                } else if ("STOCK_INSUFICIENTE".equals(chat.getContextoInmediato()) ||
-                           (chat.getContextoInmediato() != null && chat.getContextoInmediato().startsWith("ESPERANDO_CANTIDAD")) ||
-                           "CONFIRMACION_REEMPLAZO".equals(chat.getContextoInmediato())) {
-                    // PROHIBIDO DECISION_PENDIENTE: El cliente está en flujo de reemplazo de stock
-                    log.info("[OpenAI Service] Flujo de reemplazo activo en chat ID {}. Se prohíbe DECISION_PENDIENTE.", chatId);
-                    intencionPedido = "CONTINUAR";
-                } else if (esSolicitudDeProductos && tienePendientePrevioReal && !mensajeTieneDireccion) {
-                    // CASO B: Hay un 1er Pendiente activo Y el cliente pide más productos (carrito o frase natural)
-                    // => PROHIBIDO crear segundo pedido; preguntar CONTINUAR o NUEVO
-                    log.info("[OpenAI Service] CASO B detectado: cliente con 1er Pendiente activo solicita productos nuevamente. Forzando DECISION_PENDIENTE.");
-                    intencionPedido = "DECISION_PENDIENTE";
-                } else if (esCarritoInicial || esCompraNatural) {
-                    // CASO A: No hay pendiente previo => crear nuevo pedido
-                    intencionPedido = "NUEVO";
-                    chat.setContextoInmediato(null);
-                } else {
-                    // Consultas generales, mensajes de dirección, etc.
-                    if ("DECISION_PENDIENTE".equals(intencionOpenAi)) {
-                        intencionPedido = "NINGUNO";
-                    }
-                }
-                log.info("[OpenAI Service] Intención calculada - Java: {}, OpenAI: {}, Final: {}, SolicitaNuevos: {}, EsCarritoInicial: {}, TieneDireccion: {}", 
-                        intencionJava, intencionOpenAi, intencionPedido, solicitaProductosNuevos, esCarritoInicial, (mensajeTieneDireccion || tiene5Campos));
-                
-                boolean pedidoIdentificado = aiResult.path("pedidoIdentificado").asBoolean(false);
-                boolean direccionDetectada = aiResult.path("direccionDetectada").asBoolean(false);
-                boolean datosCompletos = aiResult.path("datosCompletos").asBoolean(false);
-                String prioridad = aiResult.path("prioridad").asText("BAJA");
-                
-                Long pedidoReferenciadoId = null;
-                if (aiResult.has("pedidoReferenciadoId") && !aiResult.path("pedidoReferenciadoId").isNull()) {
-                    pedidoReferenciadoId = aiResult.path("pedidoReferenciadoId").asLong();
-                }
-                String respuestaSugerida = aiResult.path("respuestaSugerida").asText("");
+                        chat.setPedidoIdentificado(finalPedidoId);
+                        chat.setDireccionDetectada(finalDireccionDet);
+                        chat.setDatosCompletos(finalDatosComp);
+                        chat.setPrioridad(prioridad);
+                        Long idRef = (pedidoPendienteActivo != null && ("PENDIENTE".equalsIgnoreCase(pedidoPendienteActivo.getEstado()) || "EN REVISION".equalsIgnoreCase(pedidoPendienteActivo.getEstado()))) 
+                                ? pedidoPendienteActivo.getId() : null;
+                        chat.setPedidoReferenciadoId(idRef);
 
-                if (contextoEsVoucher) {
-                    fasePedido = "CONCILIACION";
-                    respuestaSugerida = "¡Muchas gracias por enviarnos tu comprobante! 🎉 Ya lo tenemos registrado y estamos finalizando la validación de tu pedido para proceder con la entrega.";
-                } else if (direccionCompletaDefinitiva) {
-                    fasePedido = "CONCILIACION";
-                } else {
-                    fasePedido = "INICIAL";
-                    if (stockCheck.isHayStockInsuficiente()) {
-                        chat.setContextoInmediato("STOCK_INSUFICIENTE");
-                        prioridad = "ALTA";
-                        respuestaSugerida = stockCheck.getMensajeSugerido();
-                    } else if (esCarritoInicial) {
-                        chat.setContextoInmediato(null);
-                        respuestaSugerida = "¡Hola! Contamos con disponibilidad para " + textoProductosCarrito + " 😊. Para continuar, por favor, proporciona los siguientes datos de entrega:\n" +
-                                PLANTILLA_DATOS_ENTREGA;
-                    } else if (!"SOLICITAR_FALTANTE".equals(chat.getContextoInmediato()) && !"PREGUNTANDO_DECISION_PEDIDO".equals(chat.getContextoInmediato()) && !"STOCK_INSUFICIENTE".equals(chat.getContextoInmediato()) && (respuestaSugerida.contains("Yape") || respuestaSugerida.contains("Plin") || respuestaSugerida.contains(formattedCorpNum))) {
-                        respuestaSugerida = "¡Hola " + chat.getNombreCliente() + "! 😊 Hemos evaluado tu pedido y contamos con disponibilidad en nuestro inventario. Para poder cotizar el costo de envío y proceder con el pago, por favor compártenos los siguientes datos de entrega 🚚:\n\n" + PLANTILLA_DATOS_ENTREGA + "\n\n¡Quedamos atentos a tus datos para continuar!";
-                    }
-                }
+                        Pedido pedidoParaFailsafe = pedidoPendienteActivo;
+                        if (pedidoParaFailsafe == null && pedidoVinculado != null
+                                && "PENDIENTE".equalsIgnoreCase(pedidoVinculado.getEstado())) {
+                            pedidoParaFailsafe = pedidoVinculado;
+                        }
+                        if (pedidoParaFailsafe != null) {
+                            String est = pedidoParaFailsafe.getEstado();
+                            String resConc = pedidoParaFailsafe.getResultadoConciliacion();
+                            Double sumVouchers = pagoVoucherRepository.obtenerMontoTotalPagadoPorPedido(pedidoParaFailsafe.getId());
+                            double totP = pedidoParaFailsafe.getTotal() != null ? pedidoParaFailsafe.getTotal() : 0.0;
+                            double pagP = sumVouchers != null ? sumVouchers : 0.0;
 
-                // 5. Aplicar lógica de base de datos e inserción real en Pedido y PedidoDetalle
-                if (contextoEsVoucher) {
-                    log.info("[OpenAI Service] Mensaje o contexto de comprobante/voucher detectado. Se asegura sugerencia determinista de validación.");
-                    fasePedido = "CONCILIACION";
-                    chat.setDatosCompletos(true);
-                    chat.setContextoInmediato(null);
-                    if (pedidoVinculado != null && "VALIDADO".equalsIgnoreCase(pedidoVinculado.getEstado())) {
-                        respuestaSugerida = "¡Tu pago ha sido validado con éxito! 🎉 Estamos preparando tu pedido para despacho. Te enviaremos el número de seguimiento en cuanto esté en camino. ¡Muchas gracias por tu compra! ❤️";
-                    } else {
-                        respuestaSugerida = "¡Muchas gracias por enviarnos tu comprobante! 🎉 Ya lo tenemos registrado y estamos finalizando la validación de tu pedido para proceder con la entrega.";
-                    }
-                } else if (soloSugerencia) {
-                    log.info("[OpenAI Service] Modo soloSugerencia activado (Forzar Regeneración IA). Se omite toda mutación de Pedido y PedidoDetalle.");
-                    boolean tienePendienteActivo = (pedidoPendienteActivo != null);
-                    if (("DECISION_PENDIENTE".equals(intencionPedido) || "PREGUNTANDO_DECISION_PEDIDO".equals(chat.getContextoInmediato())) && tienePendienteActivo) {
-                        double totalAnterior = pedidoPendienteActivo.getTotal() != null ? pedidoPendienteActivo.getTotal() : 0.0;
-                        chat.setContextoInmediato("PREGUNTANDO_DECISION_PEDIDO");
-                        respuestaSugerida = "🛍️ Tienes un pedido pendiente de S/." + String.format("%.2f", totalAnterior) + ".\n\n" +
-                                "Como acabas de solicitar otros productos, elige una opción:\n\n" +
-                                "✏️ Escribe *CONTINUAR*\n" +
-                                "Para AGREGAR los nuevos productos a tu pedido anterior. Se conservarán los productos que ya tenías y se actualizará el total de tu pedido.\n\n" +
-                                "🆕 Escribe *NUEVO*\n" +
-                                "Para CREAR UN PEDIDO COMPLETAMENTE NUEVO con los productos que acabas de solicitar. Tu pedido anterior se cerrará y NO se modificará.\n\n" +
-                                "👉 Escribe *CONTINUAR* o *NUEVO*.";
-                    } else if (stockCheck.isHayStockInsuficiente()) {
-                        fasePedido = "INICIAL";
-                        chat.setContextoInmediato("STOCK_INSUFICIENTE");
-                        prioridad = "ALTA";
-                        respuestaSugerida = stockCheck.getMensajeSugerido();
-                    } else if (esCarritoInicial) {
-                        fasePedido = "INICIAL";
-                        chat.setContextoInmediato(null);
-                        respuestaSugerida = "¡Hola! Contamos con disponibilidad para " + textoProductosCarrito + " 😊. Para continuar, por favor, proporciona los siguientes datos de entrega:\n" +
-                                PLANTILLA_DATOS_ENTREGA;
-                    } else if (tienePendienteActivo && direccionCompletaDefinitiva) {
-                        double totalRealBD = pedidoPendienteActivo.getTotal() != null ? pedidoPendienteActivo.getTotal() : 0.0;
-                        String totalRealStr = String.format("%.2f", totalRealBD);
-                        String vars = pedidoPendienteActivo.getVariantesEspecificas() != null ? pedidoPendienteActivo.getVariantesEspecificas() : "Productos de tu pedido";
-                        
-                        Double sumBD = pagoVoucherRepository.obtenerMontoTotalPagadoPorPedido(pedidoPendienteActivo.getId());
-                        double pagado = sumBD != null ? sumBD : (pedidoPendienteActivo.getMontoOcr() != null ? pedidoPendienteActivo.getMontoOcr() : 0.0);
-                        double saldo = totalRealBD - pagado;
-                        
+                            if ("PAGO_COMPLETO".equalsIgnoreCase(pedidoParaFailsafe.getEstadoPago()) || (totP > 0.0 && pagP >= (totP - 0.01))) {
+                                if (!ctx.esSolicitudDeProductos) {
+                                    String varsP = pedidoParaFailsafe.getVariantesEspecificas() != null ? pedidoParaFailsafe.getVariantesEspecificas() : "Productos de tu pedido";
+                                    respuestaSugerida = "¡Gracias por tu pago! 🛍️ Hemos recibido y registrado el monto total de S/." + String.format("%.2f", totP) + " (" + varsP + ") correspondiente a tu pedido. El pago está completo y será revisado por nuestro equipo para continuar con la preparación y despacho. ¡Muchas gracias por tu compra! ❤️";
+                                    fasePedido = "CONCILIACION";
+                                    chat.setDatosCompletos(true);
+                                }
+                            } else if ("VALIDADO".equalsIgnoreCase(est)) {
+                                if (!ctx.esSolicitudDeProductos && contextoEsVoucher) {
+                                    respuestaSugerida = "¡Tu pago ha sido validado con éxito! 🎉 Estamos preparando tu pedido para despacho. Te enviaremos el número de seguimiento en cuanto esté en camino. ¡Muchas gracias por tu compra! ❤️";
+                                    fasePedido = "CONCILIACION";
+                                    chat.setDatosCompletos(true);
+                                }
+                            } else if ("RECHAZADO".equalsIgnoreCase(est)) {
+                                boolean esRechazoComercialOExpiracion = resConc != null && (resConc.contains("NUEVO PEDIDO") || resConc.contains("INACTIVIDAD") || resConc.contains("EXPIRADO"));
+                                if ((esVoucher || (resConc != null && (resConc.contains("VOUCHER") || resConc.contains("COMPROBANTE") || resConc.contains("MONTO")))) && !esRechazoComercialOExpiracion) {
+                                    respuestaSugerida = "Hola " + chat.getNombreCliente() + ", lamentablemente hemos detectado una discrepancia en tu comprobante de pago: " + (resConc != null ? resConc : "Los datos no coinciden.") + ". Por favor, envíanos el comprobante correcto o comunícate con nosotros para solucionarlo. 😊";
+                                    fasePedido = "CONCILIACION";
+                                }
+                            } else if ("EN REVISION".equalsIgnoreCase(est) || "EN_REVISION".equalsIgnoreCase(est)) {
+                                respuestaSugerida = "Hola " + chat.getNombreCliente() + ", tu comprobante de pago se encuentra en revisión por nuestro equipo. En breve te confirmaremos la validación. ¡Gracias por tu paciencia! 😊";
+                            }
+                        }
+
                         if (contextoEsVoucher) {
                             fasePedido = "CONCILIACION";
                             chat.setDatosCompletos(true);
                             chat.setContextoInmediato(null);
-                            respuestaSugerida = "¡Muchas gracias por enviarnos tu comprobante! 🎉 Ya lo tenemos registrado y estamos finalizando la validación de tu pedido para proceder con la entrega.";
-                        } else {
-                            fasePedido = "INICIAL";
-                            chat.setDatosCompletos(true);
-                            chat.setContextoInmediato(null);
-                            if (saldo <= 0.01 && totalRealBD > 0.0) {
-                                // RESPUESTA DETERMINISTA DE PAGO COMPLETO
-                                respuestaSugerida = "¡Gracias por tu pago! 🛍️ Hemos recibido y registrado el monto total de S/." + totalRealStr + " (" + vars + ") correspondiente a tu pedido. El pago está completo y será revisado por nuestro equipo para continuar con la preparación y despacho. ¡Muchas gracias por tu compra! ❤️";
-                            } else if (saldo > 0.01) {
-                                if (pagado > 0.01) {
-                                    respuestaSugerida = "¡Hola " + chat.getNombreCliente() + "! 😊 Hemos registrado tu abono de S/." + String.format("%.2f", pagado) + " para tu pedido de " + vars + " (Total: S/." + totalRealStr + ").\n\n" +
-                                            "📍 Tus datos de envío ya están registrados.\n" +
-                                            "💳 Queda un saldo pendiente de S/." + String.format("%.2f", saldo) + ".\n\n" +
-                                            "Por favor, realiza el abono del saldo restante a Yape o Plin al número " + formattedCorpNum + " y envíanos la captura o voucher por aquí para completar tu pedido. ¡Gracias! 🙌";
-                                } else {
-                                    respuestaSugerida = "¡Hola " + chat.getNombreCliente() + "! 😊 Tu pedido por un total de S/." + totalRealStr + " (" + vars + ") se encuentra registrado.\n\n" +
-                                            "📍 Tus datos de envío ya se encuentran registrados en el sistema.\n\n" +
-                                            "💳 Para proceder con el despacho, puedes realizar el pago de S/." + totalRealStr + " mediante Yape, Plin o Transferencia al número corporativo " + formattedCorpNum + ".\n\n" +
-                                            "📲 Por favor, envíanos la captura o voucher de pago por este chat para verificarlo. ¡Muchas gracias! 😊";
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    boolean tienePendienteActivo = (pedidoPendienteActivo != null);
-
-                    if ("DECISION_PENDIENTE".equals(intencionPedido) && tienePendienteActivo) {
-                        log.info("[OpenAI Service] Decisión de pedido pendiente activa para cliente con pedido ID {}. NO se modifica BD ni se eliminan detalles.", pedidoPendienteActivo.getId());
-                        chat.setContextoInmediato("PREGUNTANDO_DECISION_PEDIDO");
-
-                        double totalAnterior = pedidoPendienteActivo.getTotal() != null ? pedidoPendienteActivo.getTotal() : 0.0;
-
-                        respuestaSugerida = "🛍️ Tienes un pedido pendiente de S/." + String.format("%.2f", totalAnterior) + ".\n\n" +
-                                "Como acabas de solicitar otros productos, elige una opción:\n\n" +
-                                "✏️ Escribe *CONTINUAR*\n" +
-                                "Para AGREGAR los nuevos productos a tu pedido anterior. Se conservarán los productos que ya tenías y se actualizará el total de tu pedido.\n\n" +
-                                "🆕 Escribe *NUEVO*\n" +
-                                "Para CREAR UN PEDIDO COMPLETAMENTE NUEVO con los productos que acabas de solicitar. Tu pedido anterior se cerrará y NO se modificará.\n\n" +
-                                "👉 Escribe *CONTINUAR* o *NUEVO*.";
-                    } else if ("PREGUNTANDO_DECISION_PEDIDO".equals(chat.getContextoInmediato()) && !"NUEVO".equals(intencionPedido) && !"CONTINUAR".equals(intencionPedido) && tienePendienteActivo) {
-                        log.info("[OpenAI Service] Mensaje ambiguo recibido durante PREGUNTANDO_DECISION_PEDIDO. NO se crea ni modifica pedido.");
-                        double totalAnterior = pedidoPendienteActivo.getTotal() != null ? pedidoPendienteActivo.getTotal() : 0.0;
-                        respuestaSugerida = "🛍️ Tienes un pedido pendiente de S/." + String.format("%.2f", totalAnterior) + ".\n\n" +
-                                "Como acabas de solicitar otros productos, elige una opción:\n\n" +
-                                "✏️ Escribe *CONTINUAR*\n" +
-                                "Para AGREGAR los nuevos productos a tu pedido anterior. Se conservarán los productos que ya tenías y se actualizará el total de tu pedido.\n\n" +
-                                "🆕 Escribe *NUEVO*\n" +
-                                "Para CREAR UN PEDIDO COMPLETAMENTE NUEVO con los productos que acabas de solicitar. Tu pedido anterior se cerrará y NO se modificará.\n\n" +
-                                "👉 Escribe *CONTINUAR* o *NUEVO*.";
-                    } else {
-                        Pedido pedidoExistente = null;
-                        boolean esFlujoContinuar = false;
-
-                        if ("NUEVO".equals(intencionPedido)) {
-                            if (tienePendienteActivo && pedidoPendienteActivo != null && cantidadPedidosPendientesPrevios > 0) {
-                                log.info("[OpenAI Service] Marcando pedido PENDIENTE anterior ID {} como RECHAZADO por creación de nuevo pedido.", pedidoPendienteActivo.getId());
-                                pedidoPendienteActivo.setEstado("RECHAZADO");
-                                pedidoPendienteActivo.setResultadoConciliacion("RECHAZADO POR CREACIÓN DE NUEVO PEDIDO");
-                                pedidoRepository.save(pedidoPendienteActivo);
-                            }
-
-                            if (esCarritoInicial && pedidoPendienteActivo != null && cantidadPedidosPendientesPrevios == 0) {
-                                log.info("[OpenAI Service] Carrito inicial recibido con pedido PENDIENTE ID {} ya iniciado para este carrito. Reutilizando pedido.", pedidoPendienteActivo.getId());
-                                pedidoExistente = pedidoPendienteActivo;
+                            if (pedidoParaFailsafe != null && "VALIDADO".equalsIgnoreCase(pedidoParaFailsafe.getEstado())) {
+                                respuestaSugerida = "¡Tu pago ha sido validado con éxito! 🎉 Estamos preparando tu pedido para despacho. Te enviaremos el número de seguimiento en cuanto esté en camino. ¡Muchas gracias por tu compra! ❤️";
                             } else {
-                                pedidoExistente = new Pedido();
-                                pedidoExistente.setEstado("PENDIENTE");
-                                pedidoExistente.setEstadoPago("SIN_PAGO");
-                                pedidoExistente.setMontoDetectado(0.0);
-                                pedidoExistente.setDiferencia(0.0);
-                                java.time.ZoneId zoneId = java.time.ZoneId.of("America/Lima");
-                                pedidoExistente.setFecha(LocalDateTime.now(zoneId));
-                                pedidoExistente.setNumeroOrden("WSP-" + System.currentTimeMillis());
-
-                                Usuario cliente = usuarioRepository.findByTelefono(telefono).orElseGet(() -> {
-                                    Usuario nuevoCliente = new Usuario();
-                                    nuevoCliente.setTelefono(telefono);
-                                    nuevoCliente.setNombre(chat.getNombreCliente());
-                                    nuevoCliente.setEmail(telefono + "@puntoycoma.com");
-                                    nuevoCliente.setPassword("client_pass");
-                                    nuevoCliente.setRol("CLIENTE");
-                                    nuevoCliente.setActivo(true);
-                                    nuevoCliente.setHabilitado(true);
-                                    return usuarioRepository.save(nuevoCliente);
-                                });
-                                pedidoExistente.setUsuario(cliente);
+                                respuestaSugerida = "¡Muchas gracias por enviarnos tu comprobante! 🎉 Ya lo tenemos registrado y estamos finalizando la validación de tu pedido para proceder con la entrega.";
                             }
-                            chat.setContextoInmediato(null);
-                        } else if ("CONTINUAR".equals(intencionPedido) && tienePendienteActivo) {
-                            log.info("[OpenAI Service] Intención CONTINUAR detectada explícitamente. Reutilizando y acumulando en pedido PENDIENTE ID {}.", pedidoPendienteActivo.getId());
-                            pedidoExistente = pedidoPendienteActivo;
-                            esFlujoContinuar = true;
-                            chat.setContextoInmediato("NINGUNO");
-                        } else {
-                            pedidoExistente = pedidoRepository.findFirstByUsuarioTelefonoAndEstado(telefono, "PENDIENTE");
-                            if (pedidoExistente == null && solicitaProductosNuevos) {
-                                log.info("[OpenAI Service] Registrando nuevo pedido PENDIENTE para el cliente.");
-                                pedidoExistente = new Pedido();
-                                pedidoExistente.setEstado("PENDIENTE");
-                                pedidoExistente.setEstadoPago("SIN_PAGO");
-                                pedidoExistente.setMontoDetectado(0.0);
-                                pedidoExistente.setDiferencia(0.0);
-                                java.time.ZoneId zoneId = java.time.ZoneId.of("America/Lima");
-                                pedidoExistente.setFecha(LocalDateTime.now(zoneId));
-                                pedidoExistente.setNumeroOrden("WSP-" + System.currentTimeMillis());
-
-                                Usuario cliente = usuarioRepository.findByTelefono(telefono).orElseGet(() -> {
-                                    Usuario nuevoCliente = new Usuario();
-                                    nuevoCliente.setTelefono(telefono);
-                                    nuevoCliente.setNombre(chat.getNombreCliente());
-                                    nuevoCliente.setEmail(telefono + "@puntoycoma.com");
-                                    nuevoCliente.setPassword("client_pass");
-                                    nuevoCliente.setRol("CLIENTE");
-                                    nuevoCliente.setActivo(true);
-                                    nuevoCliente.setHabilitado(true);
-                                    return usuarioRepository.save(nuevoCliente);
-                                });
-                                pedidoExistente.setUsuario(cliente);
-                            }
-                        }
-
-                        if (pedidoExistente != null) {
-                            // Parsear y actualizar datos de envío
-                            String nombreCompleto = getSafeString(datosConciliacion, "nombreCompleto");
-                            String dni = getSafeString(datosConciliacion, "dni");
-                            String departamento = getSafeString(datosConciliacion, "departamento");
-                            String provincia = getSafeString(datosConciliacion, "provincia");
-                            String distrito = getSafeString(datosConciliacion, "distrito");
-                            String direccionExacta = getSafeString(datosConciliacion, "direccionExacta");
-                            String referencia = getSafeString(datosConciliacion, "referencia");
-                            if (referencia.isEmpty()) referencia = getSafeString(datosConciliacion, "referencias");
-                            String telefonoContacto = getSafeString(datosConciliacion, "telefonoContacto");
-                            if (telefonoContacto.isEmpty()) telefonoContacto = getSafeString(datosConciliacion, "telefono");
-
-                            String direccionUnificada = "Dpto: " + departamento + ", Prov: " + provincia + ", Dist: " + distrito + ", Dir: " + direccionExacta + ", Ref: " + referencia;
-                            boolean hasAddress = !departamento.isEmpty() || !provincia.isEmpty() || !distrito.isEmpty() || !direccionExacta.isEmpty() || !referencia.isEmpty();
-                            if (!hasAddress) {
-                                String directEntrega = getSafeString(datosConciliacion, "direccionEntrega");
-                                if (!directEntrega.isEmpty()) {
-                                    direccionUnificada = directEntrega;
-                                    hasAddress = true;
-                                }
-                            }
-
-                            // REGLA DE AISLAMIENTO: Si es un pedido nuevo recién creado (no CONTINUAR) y el mensaje actual NO contiene datos de dirección, se desestima cualquier dirección devuelta por OpenAI de historial antiguo
-                            if (pedidoExistente.getId() == null && !esFlujoContinuar && !mensajeTieneDireccion) {
-                                log.info("[OpenAI Service] Desestimando dirección del historial antiguo para el nuevo pedido.");
-                                hasAddress = false;
-                            }
-
-                            if (nombreCompleto == null || nombreCompleto.trim().isEmpty() || "Admin Principal".equalsIgnoreCase(nombreCompleto)) {
-                                nombreCompleto = (pedidoExistente.getNombreCompleto() != null && !pedidoExistente.getNombreCompleto().trim().isEmpty() && !"Admin Principal".equalsIgnoreCase(pedidoExistente.getNombreCompleto())) 
-                                        ? pedidoExistente.getNombreCompleto() : chat.getNombreCliente();
-                            }
-                            pedidoExistente.setNombreCompleto(nombreCompleto);
-
-                            if (!dni.isEmpty()) {
-                                pedidoExistente.setDni(dni);
-                            }
-
-                            if (hasAddress) {
-                                pedidoExistente.setDireccionEntrega(direccionUnificada);
-                                pedidoExistente.setDireccionEnvio(direccionUnificada);
-                            }
-                            if (!telefonoContacto.isEmpty()) {
-                                pedidoExistente.setTelefonoContacto(telefonoContacto);
-                            }
-
-                            double totalEsperado = aiResult.path("totalEsperado").asDouble(0.0);
-                            if (totalEsperado <= 0.0) {
-                                totalEsperado = datosPedidoSuperficial.path("totalEsperado").asDouble(0.0);
-                            }
-                            if (totalEsperado > 0.0 && !esFlujoContinuar && pedidoExistente.getId() == null) {
-                                pedidoExistente.setTotal(totalEsperado);
-                            }
-
-                            Pedido pedidoGuardado = pedidoRepository.save(pedidoExistente);
-                            // Actualizar la referencia de pedidoPendienteActivo al pedido recién guardado para mantener coherencia en las secciones posteriores
-                            pedidoPendienteActivo = pedidoGuardado;
-
-                            if ((hasAddress || direccionCompletaDefinitiva) && !esCarritoInicial) {
+                        } else if (stockCheck.isHayStockInsuficiente()) {
+                            fasePedido = "INICIAL";
+                            chat.setContextoInmediato("STOCK_INSUFICIENTE");
+                            prioridad = "ALTA";
+                            chat.setPedidoIdentificado(true);
+                            chat.setDireccionDetectada(false);
+                            chat.setDatosCompletos(false);
+                            finalPedidoId = true;
+                            finalDireccionDet = false;
+                            finalDatosComp = false;
+                            respuestaSugerida = stockCheck.getMensajeSugerido();
+                        } else if (ctx.esCarritoInicial && !"DECISION_PENDIENTE".equals(intencionPedido) && !"PREGUNTANDO_DECISION_PEDIDO".equals(chat.getContextoInmediato())) {
+                            if (!direccionCompletaDefinitiva && !algunaDireccionDetectada) {
+                                fasePedido = "INICIAL";
                                 chat.setContextoInmediato(null);
-                                chat.setDatosCompletos(true);
-                                if (contextoEsVoucher) {
-                                    fasePedido = "CONCILIACION";
-                                    respuestaSugerida = "¡Muchas gracias por enviarnos tu comprobante! 🎉 Ya lo tenemos registrado y estamos finalizando la validación de tu pedido para proceder con la entrega.";
-                                } else {
-                                    fasePedido = "INICIAL";
-                                    if (!esFlujoContinuar) {
-                                        double totalRealBD = pedidoGuardado.getTotal() != null ? pedidoGuardado.getTotal() : 0.0;
-                                        String totalRealStr = String.format("%.2f", totalRealBD);
-                                        String vars = pedidoGuardado.getVariantesEspecificas() != null ? pedidoGuardado.getVariantesEspecificas() : "Productos de tu pedido";
-                                        
-                                        Double sumBD = pagoVoucherRepository.obtenerMontoTotalPagadoPorPedido(pedidoGuardado.getId());
-                                        double pagado = sumBD != null ? sumBD : (pedidoGuardado.getMontoOcr() != null ? pedidoGuardado.getMontoOcr() : 0.0);
-                                        double saldo = totalRealBD - pagado;
-
-                                        if (saldo <= 0.01 && totalRealBD > 0.0) {
-                                            respuestaSugerida = "¡Gracias por tu pago! 🛍️ Hemos recibido y registrado el monto total de S/." + totalRealStr + " (" + vars + ") correspondiente a tu pedido. El pago está completo y será revisado por nuestro equipo para continuar con la preparación y despacho. ¡Muchas gracias por tu compra! ❤️";
-                                        } else if (saldo > 0.01) {
-                                            if (pagado > 0.01) {
-                                                respuestaSugerida = "¡Hola " + chat.getNombreCliente() + "! 😊 Hemos registrado tu abono de S/." + String.format("%.2f", pagado) + " para tu pedido de " + vars + " (Total: S/." + totalRealStr + ").\n\n" +
-                                                        "📍 Tus datos de envío ya están registrados.\n" +
-                                                        "💳 Queda un saldo pendiente de S/." + String.format("%.2f", saldo) + ".\n\n" +
-                                                        "Por favor, realiza el abono del saldo restante a Yape o Plin al número " + formattedCorpNum + " y envíanos la captura o voucher por aquí para completar tu pedido. ¡Gracias! 🙌";
-                                            } else {
-                                                respuestaSugerida = "¡Hola " + chat.getNombreCliente() + "! 😊 Tu pedido por un total de S/." + totalRealStr + " (" + vars + ") se encuentra registrado.\n\n" +
-                                                        "📍 Tus datos de envío ya se encuentran registrados en el sistema.\n\n" +
-                                                        "💳 Para proceder con el despacho, puedes realizar el pago de S/." + totalRealStr + " mediante Yape, Plin o Transferencia al número corporativo " + formattedCorpNum + ".\n\n" +
-                                                        "📲 Por favor, envíanos la captura o voucher de pago por este chat para verificarlo. ¡Muchas gracias! 😊";
-                                            }
-                                        }
-                                    }
-                                }
+                                chat.setPedidoIdentificado(true);
+                                chat.setDireccionDetectada(false);
+                                chat.setDatosCompletos(false);
+                                finalPedidoId = true;
+                                finalDireccionDet = false;
+                                finalDatosComp = false;
+                                String varsFinal = (pedidoPendienteActivo != null && pedidoPendienteActivo.getVariantesEspecificas() != null && !pedidoPendienteActivo.getVariantesEspecificas().trim().isEmpty()) 
+                                        ? pedidoPendienteActivo.getVariantesEspecificas() : ctx.textoProductosCarrito;
+                                respuestaSugerida = "¡Hola! Contamos con disponibilidad para " + varsFinal + " 😊. Para continuar, por favor, proporciona los siguientes datos de entrega:\n" +
+                                        PLANTILLA_DATOS_ENTREGA;
                             }
-
-                            // REGISTRO Y ACUMULACIÓN DE PEDIDO_DETALLE
-                            boolean esMensajeDeDireccion = (mensajeTieneDireccion || tiene5Campos) && !esCarritoInicial;
-                            JsonNode productosNode = datosPedidoSuperficial.path("productos");
-                            if (!esMensajeDeDireccion && productosNode.isArray() && productosNode.size() > 0) {
-                                List<Producto> todosProductos = productoRepository.findAll();
-
-                                if (!esFlujoContinuar && "NUEVO".equals(intencionPedido)) {
-                                    // Si es un pedido nuevo recién creado, asegurarse de que empiece limpio
-                                    pedidoDetalleRepository.deleteByPedidoId(pedidoGuardado.getId());
-                                }
-
-                                // Obtener detalles ya existentes para este pedido
-                                List<PedidoDetalle> detallesExistentes = pedidoDetalleRepository.findByPedidoId(pedidoGuardado.getId());
-
-                                // Concatenar el texto de la interacción reciente (mensaje actual + últimos mensajes del cliente en historial)
-                                StringBuilder sbTextosInteraccion = new StringBuilder();
-                                if (mensajeEntrante != null) sbTextosInteraccion.append(mensajeEntrante).append(" ");
-                                if (historial != null && !historial.isEmpty()) {
-                                    for (int idx = Math.max(0, historial.size() - 4); idx < historial.size(); idx++) {
-                                        Mensaje m = historial.get(idx);
-                                        if ("CLIENTE".equalsIgnoreCase(m.getRemitente()) && m.getContenido() != null) {
-                                            sbTextosInteraccion.append(m.getContenido()).append(" ");
-                                        }
-                                    }
-                                }
-                                String textoInteraccionReciente = sbTextosInteraccion.toString().toLowerCase();
-
-                                for (int i = 0; i < productosNode.size(); i++) {
-                                    JsonNode prodNode = productosNode.get(i);
-                                    String prodNombre = prodNode.path("productoNombre").asText(null);
-                                    int cantidadNueva = prodNode.path("cantidad").asInt(1);
-                                    double precioUnitario = prodNode.path("precioUnitario").asDouble(0.0);
-                                    if (cantidadNueva <= 0) cantidadNueva = 1;
-
-                                    if (prodNombre != null && !prodNombre.trim().isEmpty() && !"null".equalsIgnoreCase(prodNombre)) {
-                                        Producto productoMatcheado = null;
-                                        for (Producto p : todosProductos) {
-                                            if (p.getNombre() != null && p.getNombre().toLowerCase().contains(prodNombre.toLowerCase())) {
-                                                productoMatcheado = p;
-                                                break;
-                                            }
-                                        }
-                                        if (productoMatcheado == null && !todosProductos.isEmpty()) {
-                                            productoMatcheado = todosProductos.get(0);
-                                        }
-
-                                        if (productoMatcheado != null) {
-                                            final Long prodIdMatch = productoMatcheado.getId();
-                                            PedidoDetalle detalleExistente = null;
-                                            if (detallesExistentes != null) {
-                                                for (PedidoDetalle d : detallesExistentes) {
-                                                    if (d.getProducto() != null && d.getProducto().getId().equals(prodIdMatch)) {
-                                                        detalleExistente = d;
-                                                        break;
-                                                    }
-                                                }
-                                            }
-
-                                            if (detalleExistente != null && esFlujoContinuar) {
-                                                // DOBLE PROTECCIÓN CONTRA DOBLE ACUMULACIÓN:
-                                                // Verificar si el producto ya existente en BD fue realmente mencionado en la interacción reciente del cliente,
-                                                // para evitar sumar productos que OpenAI devolvió por simple arrastre del contexto del pedido anterior.
-                                                boolean fueMencionadoRecientemente = false;
-                                                String nombreMatcheadoLower = productoMatcheado.getNombre() != null ? productoMatcheado.getNombre().toLowerCase() : "";
-                                                String prodNombreLower = prodNombre != null ? prodNombre.toLowerCase() : "";
-
-                                                String[] palabras = nombreMatcheadoLower.split("[^a-záéíóúñ0-9]+");
-                                                for (String pal : palabras) {
-                                                    if (pal.length() > 3 && !pal.equals("taza") && !pal.equals("tazas") && !pal.equals("para")) {
-                                                        if (textoInteraccionReciente.contains(pal)) {
-                                                            fueMencionadoRecientemente = true;
-                                                            break;
-                                                        }
-                                                    }
-                                                }
-                                                if (!fueMencionadoRecientemente && !nombreMatcheadoLower.isEmpty() && textoInteraccionReciente.contains(nombreMatcheadoLower)) {
-                                                    fueMencionadoRecientemente = true;
-                                                }
-                                                if (!fueMencionadoRecientemente && !prodNombreLower.isEmpty() && textoInteraccionReciente.contains(prodNombreLower)) {
-                                                    fueMencionadoRecientemente = true;
-                                                }
-
-                                                if (fueMencionadoRecientemente) {
-                                                    log.info("[OpenAI Service] Acumulando {} unidades adicionales para el producto existente '{}' (ID {}) en pedido ID {}.",
-                                                            cantidadNueva, productoMatcheado.getNombre(), prodIdMatch, pedidoGuardado.getId());
-                                                    detalleExistente.setCantidad(detalleExistente.getCantidad() + cantidadNueva);
-                                                    double precioFinal = precioUnitario > 0 ? precioUnitario : (productoMatcheado.getPrecio() != null ? productoMatcheado.getPrecio() : 0.0);
-                                                    detalleExistente.setPrecioUnitario(precioFinal);
-                                                    pedidoDetalleRepository.save(detalleExistente);
-                                                } else {
-                                                    log.warn("[OpenAI Service] Doble Protección Activa: Se omite la re-acumulación del producto histórico '{}' (ID {}) porque NO fue solicitado nuevamente en el mensaje reciente.",
-                                                            productoMatcheado.getNombre(), prodIdMatch);
-                                                }
-                                            } else {
-                                                // Crear un nuevo PedidoDetalle para este producto
-                                                PedidoDetalle detalle = new PedidoDetalle();
-                                                detalle.setPedido(pedidoGuardado);
-                                                detalle.setProducto(productoMatcheado);
-                                                detalle.setCantidad(cantidadNueva);
-                                                double precioFinal = precioUnitario > 0 ? precioUnitario : (productoMatcheado.getPrecio() != null ? productoMatcheado.getPrecio() : 0.0);
-                                                detalle.setPrecioUnitario(precioFinal);
-                                                pedidoDetalleRepository.save(detalle);
-                                                if (detallesExistentes != null) {
-                                                    detallesExistentes.add(detalle);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // Recalcular el TOTAL acumulado y las variantes asociadas al pedido a partir de TODOS sus PedidoDetalle en BD
-                                List<PedidoDetalle> todosDetallesGuardados = pedidoDetalleRepository.findByPedidoId(pedidoGuardado.getId());
-                                double sumaTotales = 0.0;
-                                StringBuilder sbVariantes = new StringBuilder();
-                                for (PedidoDetalle d : todosDetallesGuardados) {
-                                    double pUnit = d.getPrecioUnitario() != null ? d.getPrecioUnitario() : (d.getProducto() != null && d.getProducto().getPrecio() != null ? d.getProducto().getPrecio() : 0.0);
-                                    int cant = d.getCantidad() != null ? d.getCantidad() : 1;
-                                    sumaTotales += (pUnit * cant);
-                                    if (sbVariantes.length() > 0) sbVariantes.append(", ");
-                                    sbVariantes.append(d.getProducto() != null ? d.getProducto().getNombre() : "Producto").append(" x").append(cant);
-                                }
-
-                                if (sumaTotales > 0.0) {
-                                    pedidoGuardado.setTotal(sumaTotales);
-                                }
-                                if (sbVariantes.length() > 0) {
-                                    pedidoGuardado.setVariantesEspecificas(sbVariantes.toString());
-                                }
-                                pedidoRepository.save(pedidoGuardado);
-                                log.info("[DATABASE] PedidoDetalle acumulado/actualizado para Pedido ID: {}. Total acumulado: S/ {}", pedidoGuardado.getId(), sumaTotales);
-
-                                if (esFlujoContinuar && sumaTotales > 0.0) {
-                                    double totalParcialOpenAi = aiResult.path("totalEsperado").asDouble(0.0);
-                                    if (totalParcialOpenAi <= 0.0) {
-                                        totalParcialOpenAi = datosPedidoSuperficial.path("totalEsperado").asDouble(0.0);
-                                    }
-                                    String totalRealStr = String.format("%.2f", sumaTotales);
-                                    if (totalParcialOpenAi > 0.0) {
-                                        String totalParcialStr = String.format("%.2f", totalParcialOpenAi);
-                                        String totalParcialIntStr = String.format("%.0f", totalParcialOpenAi);
-                                        if (respuestaSugerida != null && !respuestaSugerida.isEmpty()) {
-                                            respuestaSugerida = respuestaSugerida.replace("S/." + totalParcialStr, "S/." + totalRealStr)
-                                                                                 .replace("S/ " + totalParcialStr, "S/ " + totalRealStr)
-                                                                                 .replace("S/." + totalParcialIntStr, "S/." + totalRealStr)
-                                                                                 .replace("S/ " + totalParcialIntStr, "S/ " + totalRealStr)
-                                                                                 .replace("S/" + totalParcialStr, "S/" + totalRealStr)
-                                                                                 .replace("S/" + totalParcialIntStr, "S/" + totalRealStr);
-                                        }
-                                    }
-                                    
-                                    // VERIFICACIÓN DETERMINISTA DE DIRECCIÓN Y FASE TRAS CONTINUAR:
-                                    if (direccionCompletaDefinitiva) {
-                                        if (contextoEsVoucher) {
-                                            fasePedido = "CONCILIACION";
-                                            chat.setDatosCompletos(true);
-                                        } else {
-                                            fasePedido = "INICIAL";
-                                            chat.setDatosCompletos(true);
-                                        }
-                                        respuestaSugerida = "¡Perfecto! Hemos agregado los nuevos productos a tu pedido anterior. Tu pedido total actualizado es de S/." + totalRealStr + " (" + sbVariantes.toString() + ").\n\n" +
-                                                "📍 Tus datos de envío ya se encuentran registrados en el sistema.\n\n" +
-                                                "💳 Para proceder con el despacho, puedes realizar el pago de S/." + totalRealStr + " mediante Yape, Plin o Transferencia al número corporativo " + formattedCorpNum + ".\n\n" +
-                                                "📲 Por favor, envíanos la captura o voucher de pago por este chat para verificarlo. ¡Muchas gracias! 😊";
-                                    } else {
-                                        fasePedido = "INICIAL";
-                                        if (respuestaSugerida == null || !respuestaSugerida.contains(totalRealStr) || respuestaSugerida.contains(formattedCorpNum)) {
-                                            respuestaSugerida = "¡Perfecto! Hemos agregado los nuevos productos a tu pedido anterior. Tu pedido total actualizado es de S/." + totalRealStr + " (" + sbVariantes.toString() + "). Por favor, indícanos tus datos de envío faltantes para finalizar la cotización.";
-                                        }
-                                    }
-                                }
-                                if (esCarritoInicial) {
-                                    String varsFinal = sbVariantes.length() > 0 ? sbVariantes.toString() : textoProductosCarrito;
-                                    fasePedido = "INICIAL";
-                                    chat.setContextoInmediato(null);
-                                    respuestaSugerida = "¡Hola! Contamos con disponibilidad para " + varsFinal + " 😊. Para continuar, por favor, proporciona los siguientes datos de entrega:\n" +
-                                            PLANTILLA_DATOS_ENTREGA;
-                                }
-                            } else if (esMensajeDeDireccion) {
-                                log.info("[OpenAI Service] Mensaje de datos de entrega detectado. Se preservan intactos los productos y el total original del pedido existente ID {}.", pedidoGuardado.getId());
-                            }
-                            log.info("[DATABASE] ¡ÉXITO! Registro de Pedido PENDIENTE procesado en base de datos.");
                         }
-                    }
-                }
 
-                // Sanitizar respuesta sugerida si no corresponde a decisión de pedido pendiente
-                if (esCarritoInicial || !tienePedidoPendiente || (!"DECISION_PENDIENTE".equals(intencionPedido) && !"PREGUNTANDO_DECISION_PEDIDO".equals(chat.getContextoInmediato()))) {
-                    if (respuestaSugerida != null && (respuestaSugerida.contains("Tienes un pedido pendiente") || respuestaSugerida.contains("pedido pendiente de"))) {
-                        log.warn("[OpenAI Service] Alerta de desincronización: OpenAI sugirió un mensaje de pedido pendiente por arrastre de historial pero la intención no es de decisión o es carrito inicial. Limpiando sugerencia.");
-                        if (esCarritoInicial) {
-                            String varsFinal = (pedidoPendienteActivo != null && pedidoPendienteActivo.getVariantesEspecificas() != null) ? pedidoPendienteActivo.getVariantesEspecificas() : textoProductosCarrito;
-                            respuestaSugerida = "¡Hola! Contamos con disponibilidad para " + varsFinal + " 😊. Para continuar, por favor, proporciona los siguientes datos de entrega:\n" +
-                                    PLANTILLA_DATOS_ENTREGA;
-                        } else if (direccionCompletaDefinitiva && pedidoPendienteActivo != null) {
-                            double totalRealBD = pedidoPendienteActivo.getTotal() != null ? pedidoPendienteActivo.getTotal() : 0.0;
-                            String totalRealStr = String.format("%.2f", totalRealBD);
-                            String vars = pedidoPendienteActivo.getVariantesEspecificas() != null ? pedidoPendienteActivo.getVariantesEspecificas() : "Productos de tu pedido";
-                            respuestaSugerida = "¡Hola " + chat.getNombreCliente() + "! 😊 Tu pedido por un total de S/." + totalRealStr + " (" + vars + ") se encuentra registrado.\n\n" +
-                                    "📍 Tus datos de envío ya se encuentran registrados en el sistema.\n\n" +
-                                    "💳 Para proceder con el despacho, puedes realizar el pago de S/." + totalRealStr + " mediante Yape, Plin o Transferencia al número corporativo " + formattedCorpNum + ".\n\n" +
-                                    "📲 Por favor, envíanos la captura o voucher de pago por este chat para verificarlo. ¡Muchas gracias! 😊";
-                        } else {
-                            respuestaSugerida = "¡Hola " + chat.getNombreCliente() + "! 😊 ¿En qué podemos ayudarte el día de hoy? Si deseas realizar una compra, por favor indícanos qué productos te gustaría cotizar.";
-                        }
-                    }
-                }
+                        chat.setSugerenciaIa(respuestaSugerida);
+                        chat.setFasePedido(fasePedido);
+                        chat.setPedidoIdentificado(finalPedidoId);
+                        chat.setDireccionDetectada(finalDireccionDet);
+                        chat.setDatosCompletos(finalDatosComp);
+                        chat.setPrioridad(prioridad);
 
-                // 6. Actualizar la entidad Chat con los resultados semánticos e indicadores coherentes
-                boolean finalPedidoId = (datosPedidoSuperficial != null && datosPedidoSuperficial.path("productos").isArray() && datosPedidoSuperficial.path("productos").size() > 0) || pedidoIdentificado || (pedidoPendienteActivo != null);
-                boolean finalDireccionDet = algunaDireccionDetectada || direccionDetectada;
-                boolean finalDatosComp = finalPedidoId && direccionCompletaDefinitiva;
+                        chatRepository.save(chat);
+                        log.info("[OpenAI Service] Chat ID: {} actualizado en base de datos. Fase: {}, Prioridad: {}, PedidoIdentificado: {}, DireccionDetectada: {}, DatosCompletos: {}", 
+                                chatId, fasePedido, prioridad, finalPedidoId, finalDireccionDet, finalDatosComp);
 
-                // RESETEO LIMPIO DE INDICADORES EN CASO A (1er PENDIENTE NUEVO) O STOCK INSUFICIENTE:
-                if (stockCheck.isHayStockInsuficiente()) {
-                    finalPedidoId = true;
-                    finalDireccionDet = false;
-                    finalDatosComp = false;
-                    fasePedido = "INICIAL";
-                    chat.setContextoInmediato("STOCK_INSUFICIENTE");
-                    prioridad = "ALTA";
-                    respuestaSugerida = stockCheck.getMensajeSugerido();
-                } else if (esCarritoInicial && !"DECISION_PENDIENTE".equals(intencionPedido) && !"PREGUNTANDO_DECISION_PEDIDO".equals(chat.getContextoInmediato())) {
-                    finalPedidoId = true;
-                    finalDireccionDet = false;
-                    finalDatosComp = false;
-                    fasePedido = "INICIAL";
-                    chat.setContextoInmediato(null);
-                }
-
-                chat.setPedidoIdentificado(finalPedidoId);
-                chat.setDireccionDetectada(finalDireccionDet);
-                chat.setDatosCompletos(finalDatosComp);
-                chat.setPrioridad(prioridad);
-                Long idRef = (pedidoPendienteActivo != null && ("PENDIENTE".equalsIgnoreCase(pedidoPendienteActivo.getEstado()) || "EN REVISION".equalsIgnoreCase(pedidoPendienteActivo.getEstado()))) 
-                        ? pedidoPendienteActivo.getId() : null;
-                chat.setPedidoReferenciadoId(idRef);
-                
-                // CORRECCIÓN — FAILSAFE CORREGIDO (HUMANO-IN-THE-LOOP):
-                // PROHIBIDO usar pedidos VALIDADO/RECHAZADO/EN REVISION como base del failsafe
-                // cuando el contexto es una nueva solicitud de productos (esSolicitudDeProductos).
-                // El failsafe solo aplica sobre pedidoPendienteActivo (que es el pedido recién creado o el previo PENDIENTE).
-                Pedido pedidoParaFailsafe = pedidoPendienteActivo; // NUNCA usar pedidoVinculado si está VALIDADO
-                if (pedidoParaFailsafe == null && pedidoVinculado != null
-                        && "PENDIENTE".equalsIgnoreCase(pedidoVinculado.getEstado())) {
-                    // Solo usar pedidoVinculado si es estrictamente PENDIENTE
-                    pedidoParaFailsafe = pedidoVinculado;
-                }
-                if (pedidoParaFailsafe != null) {
-                    String est = pedidoParaFailsafe.getEstado();
-                    String resConc = pedidoParaFailsafe.getResultadoConciliacion();
-                    Double sumVouchers = pagoVoucherRepository.obtenerMontoTotalPagadoPorPedido(pedidoParaFailsafe.getId());
-                    double totP = pedidoParaFailsafe.getTotal() != null ? pedidoParaFailsafe.getTotal() : 0.0;
-                    double pagP = sumVouchers != null ? sumVouchers : 0.0;
-
-                    if ("PAGO_COMPLETO".equalsIgnoreCase(pedidoParaFailsafe.getEstadoPago()) || (totP > 0.0 && pagP >= (totP - 0.01))) {
-                        // Solo sobrescribir con mensaje de pago completo si NO estamos en medio de una nueva solicitud de compra
-                        if (!esSolicitudDeProductos) {
-                            String varsP = pedidoParaFailsafe.getVariantesEspecificas() != null ? pedidoParaFailsafe.getVariantesEspecificas() : "Productos de tu pedido";
-                            respuestaSugerida = "¡Gracias por tu pago! 🛍️ Hemos recibido y registrado el monto total de S/." + String.format("%.2f", totP) + " (" + varsP + ") correspondiente a tu pedido. El pago está completo y será revisado por nuestro equipo para continuar con la preparación y despacho. ¡Muchas gracias por tu compra! ❤️";
-                            fasePedido = "CONCILIACION";
-                            chat.setDatosCompletos(true);
-                        }
-                    } else if ("VALIDADO".equalsIgnoreCase(est)) {
-                        // CORRECCIÓN CRÍTICA: NUNCA sobrescribir con mensaje VALIDADO cuando el cliente
-                        // está haciendo una nueva solicitud de compra. Solo aplica en contextos de voucher.
-                        if (!esSolicitudDeProductos && contextoEsVoucher) {
-                            respuestaSugerida = "¡Tu pago ha sido validado con éxito! 🎉 Estamos preparando tu pedido para despacho. Te enviaremos el número de seguimiento en cuanto esté en camino. ¡Muchas gracias por tu compra! ❤️";
-                            fasePedido = "CONCILIACION";
-                            chat.setDatosCompletos(true);
-                        }
-                    } else if ("RECHAZADO".equalsIgnoreCase(est)) {
-                        // SOLAMENTE activar plantilla de comprobante si el mensaje entrante es un voucher O si el rechazo fue por comprobante/OCR real (NO por nuevo pedido ni expiración)
-                        boolean esRechazoComercialOExpiracion = resConc != null && (resConc.contains("NUEVO PEDIDO") || resConc.contains("INACTIVIDAD") || resConc.contains("EXPIRADO"));
-                        if ((esVoucher || (resConc != null && (resConc.contains("VOUCHER") || resConc.contains("COMPROBANTE") || resConc.contains("MONTO")))) && !esRechazoComercialOExpiracion) {
-                            respuestaSugerida = "Hola " + chat.getNombreCliente() + ", lamentablemente hemos detectado una discrepancia en tu comprobante de pago: " + (resConc != null ? resConc : "Los datos no coinciden.") + ". Por favor, envíanos el comprobante correcto o comunícate con nosotros para solucionarlo. 😊";
-                            fasePedido = "CONCILIACION";
-                        }
-                    } else if ("EN REVISION".equalsIgnoreCase(est) || "EN_REVISION".equalsIgnoreCase(est)) {
-                        respuestaSugerida = "Hola " + chat.getNombreCliente() + ", tu comprobante de pago se encuentra en revisión por nuestro equipo. En breve te confirmaremos la validación. ¡Gracias por tu paciencia! 😊";
-                    }
-                }
-                
-                if (contextoEsVoucher) {
-                    fasePedido = "CONCILIACION";
-                    chat.setDatosCompletos(true);
-                    chat.setContextoInmediato(null);
-                    if (pedidoParaFailsafe != null && "VALIDADO".equalsIgnoreCase(pedidoParaFailsafe.getEstado())) {
-                        respuestaSugerida = "¡Tu pago ha sido validado con éxito! 🎉 Estamos preparando tu pedido para despacho. Te enviaremos el número de seguimiento en cuanto esté en camino. ¡Muchas gracias por tu compra! ❤️";
                     } else {
-                        respuestaSugerida = "¡Muchas gracias por enviarnos tu comprobante! 🎉 Ya lo tenemos registrado y estamos finalizando la validación de tu pedido para proceder con la entrega.";
-                    }
-                } else if (stockCheck.isHayStockInsuficiente()) {
-                    fasePedido = "INICIAL";
-                    chat.setContextoInmediato("STOCK_INSUFICIENTE");
-                    prioridad = "ALTA";
-                    chat.setPedidoIdentificado(true);
-                    chat.setDireccionDetectada(false);
-                    chat.setDatosCompletos(false);
-                    finalPedidoId = true;
-                    finalDireccionDet = false;
-                    finalDatosComp = false;
-                    respuestaSugerida = stockCheck.getMensajeSugerido();
-                } else if (esCarritoInicial && !"DECISION_PENDIENTE".equals(intencionPedido) && !"PREGUNTANDO_DECISION_PEDIDO".equals(chat.getContextoInmediato())) {
-                    fasePedido = "INICIAL";
-                    chat.setContextoInmediato(null);
-                    chat.setPedidoIdentificado(true);
-                    chat.setDireccionDetectada(false);
-                    chat.setDatosCompletos(false);
-                    finalPedidoId = true;
-                    finalDireccionDet = false;
-                    finalDatosComp = false;
-                    String varsFinal = (pedidoPendienteActivo != null && pedidoPendienteActivo.getVariantesEspecificas() != null && !pedidoPendienteActivo.getVariantesEspecificas().trim().isEmpty()) 
-                            ? pedidoPendienteActivo.getVariantesEspecificas() : textoProductosCarrito;
-                    respuestaSugerida = "¡Hola! Contamos con disponibilidad para " + varsFinal + " 😊. Para continuar, por favor, proporciona los siguientes datos de entrega:\n" +
-                            PLANTILLA_DATOS_ENTREGA;
-                }
-                
-                if (contextoEsVoucher && (respuestaSugerida == null || 
-                    respuestaSugerida.contains("Para proceder con el despacho, puedes realizar el pago") || 
-                    respuestaSugerida.contains("puedes realizar el pago de") || 
-                    respuestaSugerida.contains("Tienes un pedido pendiente de"))) {
-                    log.warn("[OpenAI Service] Failsafe: Reemplazando plantilla de cobro con agradecimiento de comprobante debido a contexto de voucher.");
-                    if (pedidoParaFailsafe != null && "VALIDADO".equalsIgnoreCase(pedidoParaFailsafe.getEstado())) {
-                        respuestaSugerida = "¡Tu pago ha sido validado con éxito! 🎉 Estamos preparando tu pedido para despacho. Te enviaremos el número de seguimiento en cuanto esté en camino. ¡Muchas gracias por tu compra! ❤️";
-                    } else {
-                        respuestaSugerida = "¡Muchas gracias por enviarnos tu comprobante! 🎉 Ya lo tenemos registrado y estamos finalizando la validación de tu pedido para proceder con la entrega.";
-                    }
-                } else if (!contextoEsVoucher && (respuestaSugerida == null || 
-                    respuestaSugerida.toLowerCase().contains("comprobante") || 
-                    respuestaSugerida.toLowerCase().contains("voucher") || 
-                    respuestaSugerida.toLowerCase().contains("recibido tu pago") || 
-                    respuestaSugerida.toLowerCase().contains("en validación"))) {
-                    log.warn("[OpenAI Service] Failsafe: Limpiando respuesta de comprobante porque no existe voucher para el pedido activo.");
-                    if (stockCheck.isHayStockInsuficiente()) {
-                        fasePedido = "INICIAL";
-                        chat.setContextoInmediato("STOCK_INSUFICIENTE");
-                        prioridad = "ALTA";
-                        respuestaSugerida = stockCheck.getMensajeSugerido();
-                    } else if (esCarritoInicial && !"DECISION_PENDIENTE".equals(intencionPedido) && !"PREGUNTANDO_DECISION_PEDIDO".equals(chat.getContextoInmediato())) {
-                        String varsFinal = (pedidoPendienteActivo != null && pedidoPendienteActivo.getVariantesEspecificas() != null && !pedidoPendienteActivo.getVariantesEspecificas().trim().isEmpty()) 
-                                ? pedidoPendienteActivo.getVariantesEspecificas() : textoProductosCarrito;
-                        respuestaSugerida = "¡Hola! Contamos con disponibilidad para " + varsFinal + " 😊. Para continuar, por favor, proporciona los siguientes datos de entrega:\n" +
-                                PLANTILLA_DATOS_ENTREGA;
-                    } else if (direccionCompletaDefinitiva && pedidoPendienteActivo != null) {
-                        double totalRealBD = pedidoPendienteActivo.getTotal() != null ? pedidoPendienteActivo.getTotal() : 0.0;
-                        String totalRealStr = String.format("%.2f", totalRealBD);
-                        String vars = pedidoPendienteActivo.getVariantesEspecificas() != null ? pedidoPendienteActivo.getVariantesEspecificas() : "Productos de tu pedido";
-                        respuestaSugerida = "¡Hola " + chat.getNombreCliente() + "! 😊 Tu pedido por un total de S/." + totalRealStr + " (" + vars + ") se encuentra registrado.\n\n" +
-                                "📍 Tus datos de envío ya se encuentran registrados en el sistema.\n\n" +
-                                "💳 Para proceder con el despacho, puedes realizar el pago de S/." + totalRealStr + " mediante Yape, Plin o Transferencia al número corporativo " + formattedCorpNum + ".\n\n" +
-                                "📲 Por favor, envíanos la captura o voucher de pago por este chat para verificarlo. ¡Muchas gracias! 😊";
-                    }
-                }
-                
-                if (stockCheck.isHayStockInsuficiente()) {
-                    respuestaSugerida = stockCheck.getMensajeSugerido();
-                    fasePedido = "INICIAL";
-                    chat.setContextoInmediato("STOCK_INSUFICIENTE");
-                    prioridad = "ALTA";
-                    finalPedidoId = true;
-                    finalDireccionDet = false;
-                    finalDatosComp = false;
-                }
-
-                chat.setSugerenciaIa(respuestaSugerida);
-                chat.setFasePedido(fasePedido);
-                chat.setPedidoIdentificado(finalPedidoId);
-                chat.setDireccionDetectada(finalDireccionDet);
-                chat.setDatosCompletos(finalDatosComp);
-                chat.setPrioridad(prioridad);
-
-                chatRepository.save(chat);
-                log.info("[OpenAI Service] Chat ID: {} actualizado en base de datos. Fase: {}, Prioridad: {}, PedidoIdentificado: {}, DireccionDetectada: {}, DatosCompletos: {}", 
-                        chatId, fasePedido, prioridad, finalPedidoId, finalDireccionDet, finalDatosComp);
-            }
-
-                } catch (Exception e) {
-                    log.error("[OpenAI Service] Excepción durante el procesamiento con OpenAI: {}", e.getMessage(), e);
-                    // CORRECCIÓN: Fallback determinista en Java para que si OpenAI falla o da timeout,
-                    // el pedido PENDIENTE se cree y registre de todos modos con sus productos y se solicite la entrega.
-                    try {
-                        Chat chatFallback = chatRepository.findById(chatId).orElse(null);
-                        if (chatFallback != null && esSolicitudDeProductos) {
+                        // Fallback determinista si OpenAI falló o retornó null
+                        log.warn("[OpenAI Service] OpenAI retornó null o falló. Ejecutando fallback determinista en base de datos...");
+                        if (ctx.esSolicitudDeProductos) {
                             Pedido pedidoPendiente = pedidoRepository.findFirstByUsuarioTelefonoAndEstado(telefono, "PENDIENTE");
                             if (pedidoPendiente == null) {
-                                // CASO A DETERMINISTA: Crear pedido en BD como PENDIENTE
                                 Map<Producto, Integer> prodsExtraidos = parsearProductosDeterminista(mensajeEntrante);
                                 Pedido nuevoPed = new Pedido();
                                 nuevoPed.setEstado("PENDIENTE");
@@ -1629,7 +1674,7 @@ public class OpenAiService {
                                 Usuario cliente = usuarioRepository.findByTelefono(telefono).orElseGet(() -> {
                                     Usuario nc = new Usuario();
                                     nc.setTelefono(telefono);
-                                    nc.setNombre(chatFallback.getNombreCliente());
+                                    nc.setNombre(chat.getNombreCliente());
                                     nc.setEmail(telefono + "@puntoycoma.com");
                                     nc.setPassword("client_pass");
                                     nc.setRol("CLIENTE");
@@ -1638,7 +1683,7 @@ public class OpenAiService {
                                     return usuarioRepository.save(nc);
                                 });
                                 nuevoPed.setUsuario(cliente);
-                                nuevoPed.setNombreCompleto(chatFallback.getNombreCliente());
+                                nuevoPed.setNombreCompleto(chat.getNombreCliente());
                                 Pedido pedGuardado = pedidoRepository.save(nuevoPed);
 
                                 double sumaTot = 0.0;
@@ -1663,31 +1708,30 @@ public class OpenAiService {
                                 pedGuardado = pedidoRepository.save(pedGuardado);
 
                                 String varsTexto = sbVars.length() > 0 ? sbVars.toString() : "tu pedido";
-                                StockCheckResult stockCheckFallback = verificarStockPedido(null, mensajeEntrante, chatFallback.getNombreCliente());
+                                StockCheckResult stockCheckFallback = verificarStockPedido(null, mensajeEntrante, chat.getNombreCliente());
                                 if (stockCheckFallback.isHayStockInsuficiente()) {
-                                    chatFallback.setSugerenciaIa(stockCheckFallback.getMensajeSugerido());
-                                    chatFallback.setFasePedido("INICIAL");
-                                    chatFallback.setPedidoReferenciadoId(pedGuardado.getId());
-                                    chatFallback.setPedidoIdentificado(true);
-                                    chatFallback.setDireccionDetectada(false);
-                                    chatFallback.setDatosCompletos(false);
-                                    chatFallback.setContextoInmediato("STOCK_INSUFICIENTE");
-                                    chatFallback.setPrioridad("ALTA");
+                                    chat.setSugerenciaIa(stockCheckFallback.getMensajeSugerido());
+                                    chat.setFasePedido("INICIAL");
+                                    chat.setPedidoReferenciadoId(pedGuardado.getId());
+                                    chat.setPedidoIdentificado(true);
+                                    chat.setDireccionDetectada(false);
+                                    chat.setDatosCompletos(false);
+                                    chat.setContextoInmediato("STOCK_INSUFICIENTE");
+                                    chat.setPrioridad("ALTA");
                                 } else {
                                     String sugerenciaFallback = "¡Hola! Contamos con disponibilidad para " + varsTexto + " 😊. Para continuar, por favor, proporciona los siguientes datos de entrega:\n" +
                                             PLANTILLA_DATOS_ENTREGA;
-                                    chatFallback.setSugerenciaIa(sugerenciaFallback);
-                                    chatFallback.setFasePedido("INICIAL");
-                                    chatFallback.setPedidoReferenciadoId(pedGuardado.getId());
-                                    chatFallback.setPedidoIdentificado(true);
-                                    chatFallback.setDireccionDetectada(false);
-                                    chatFallback.setDatosCompletos(false);
-                                    chatFallback.setContextoInmediato(null);
+                                    chat.setSugerenciaIa(sugerenciaFallback);
+                                    chat.setFasePedido("INICIAL");
+                                    chat.setPedidoReferenciadoId(pedGuardado.getId());
+                                    chat.setPedidoIdentificado(true);
+                                    chat.setDireccionDetectada(false);
+                                    chat.setDatosCompletos(false);
+                                    chat.setContextoInmediato(null);
                                 }
-                                chatRepository.save(chatFallback);
-                                log.info("[OpenAI Service] Fallback exitoso: Pedido ID {} creado deterministicamente y chat actualizado tras fallo de OpenAI.", pedGuardado.getId());
+                                chatRepository.save(chat);
+                                log.info("[OpenAI Service] Fallback exitoso: Pedido ID {} creado deterministicamente y chat actualizado.", pedGuardado.getId());
                             } else {
-                                // CASO B o ya existe un pedido:
                                 String sugerenciaFallback = "🛍️ Tienes un pedido pendiente de S/." + String.format("%.2f", (pedidoPendiente.getTotal() != null ? pedidoPendiente.getTotal() : 0.0)) + ".\n\n" +
                                         "Como acabas de solicitar otros productos, elige una opción:\n\n" +
                                         "✏️ Escribe *CONTINUAR*\n" +
@@ -1695,14 +1739,14 @@ public class OpenAiService {
                                         "🆕 Escribe *NUEVO*\n" +
                                         "Para CREAR UN PEDIDO COMPLETAMENTE NUEVO con los productos que acabas de solicitar. Tu pedido anterior se cerrará y NO se modificará.\n\n" +
                                         "👉 Escribe *CONTINUAR* o *NUEVO*.";
-                                chatFallback.setSugerenciaIa(sugerenciaFallback);
-                                chatFallback.setContextoInmediato("PREGUNTANDO_DECISION_PEDIDO");
-                                chatRepository.save(chatFallback);
+                                chat.setSugerenciaIa(sugerenciaFallback);
+                                chat.setContextoInmediato("PREGUNTANDO_DECISION_PEDIDO");
+                                chatRepository.save(chat);
                             }
                         }
-                    } catch (Exception fallbackEx) {
-                        log.error("[OpenAI Service] Error en fallback de excepción: {}", fallbackEx.getMessage());
                     }
+                } catch (Exception e) {
+                    log.error("[OpenAI Service] Excepción en Paso 3 (Persistencia): {}", e.getMessage(), e);
                 }
                 return null;
             });
