@@ -473,9 +473,14 @@ function inicializarCliente() {
 
     client = new Client({
         authStrategy: new LocalAuth({
+            clientId: 'sesion-v2',
             dataPath: './.wwebjs_auth'
         }),
         authTimeoutMs: 120000,
+        webVersionCache: {
+            type: 'remote',
+            remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1018942289-alpha.html'
+        },
         puppeteer: {
             headless: true,
             args: [
@@ -490,7 +495,8 @@ function inicializarCliente() {
                 '--disable-background-networking',
                 '--disable-default-apps',
                 '--disable-sync',
-                '--js-flags=--max-old-space-size=512'
+                '--js-flags=--max-old-space-size=512',
+                '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
             ]
         }
     });
