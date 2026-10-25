@@ -1,3 +1,4 @@
+const fs = require('fs');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcodeTerminal = require('qrcode-terminal');
 const axios = require('axios');
@@ -11,9 +12,15 @@ try {
     console.warn('⚠️ Módulo "qrcode" no disponible. Ejecuta npm install en puente-whatsapp para generar Base64 de QR.');
 }
 
-// Asegurar que la URL del backend siempre termine en el endpoint del webhook (/webhook)
-let rawBackendUrl = process.env.BACKEND_URL || 'http://localhost:8080/webhook';
+// Configuración de la URL de Spring Boot con fallback al backend real en Azure
+let rawBackendUrl = process.env.BACKEND_URL || 'https://puntoycoma-backend-cde2g6htdcewgafr.eastus2-01.azurewebsites.net/webhook';
 rawBackendUrl = rawBackendUrl.trim();
+
+// Si está en Azure y viene con localhost, sustituirlo por el dominio público de Azure
+if (process.env.WEBSITE_SITE_NAME && (rawBackendUrl.includes('localhost') || rawBackendUrl.includes('127.0.0.1'))) {
+    rawBackendUrl = 'https://puntoycoma-backend-cde2g6htdcewgafr.eastus2-01.azurewebsites.net/webhook';
+}
+
 if (!rawBackendUrl.endsWith('/webhook') && !rawBackendUrl.includes('/api/')) {
     rawBackendUrl = rawBackendUrl.replace(/\/+$/, '') + '/webhook';
 }
@@ -44,6 +51,18 @@ function isDuplicateMsg(msgId) {
     }
     processedMsgIds.set(msgId, now);
     return false;
+}
+
+// Función para purgar la carpeta de sesión si se corrompe o se cierra en el teléfono
+function limpiarCarpetaSesion() {
+    try {
+        if (fs.existsSync('./.wwebjs_auth')) {
+            fs.rmSync('./.wwebjs_auth', { recursive: true, force: true });
+            console.log('🧹 [Limpieza] Carpeta .wwebjs_auth eliminada correctamente.');
+        }
+    } catch (err) {
+        console.error('⚠️ Error eliminando .wwebjs_auth:', err.message);
+    }
 }
 
 // Resolver JID de tipo @lid a número telefónico real (@c.us)
@@ -184,8 +203,6 @@ function asegurarIdSerializado(m) {
 async function descargarMediaConReintento(msg, maxIntentos = 4) {
     asegurarIdSerializado(msg);
 
-    const msgIdStr = msg.id?._serialized || msg.id?.id || 'desconocido';
-
     if (msg.hasMedia || msg.type === 'image' || msg.type === 'document') {
         await new Promise(resolve => setTimeout(resolve, 2000));
     }
@@ -239,7 +256,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Endpoint para consultar el estado actual de WhatsApp Web y obtener el QR si existe
+// Endpoint para consultar el estado actual de WhatsApp Web
 app.get('/status', (req, res) => {
     const isConn = currentStatus === 'CONNECTED';
     const finalPhone = (client && client.info && client.info.wid)
@@ -270,6 +287,65 @@ app.get('/api/whatsapp/estado', (req, res) => {
         qrCodeBase64: qrCodeBase64,
         qr: qrCodeBase64
     });
+});
+
+// Endpoint para purgar sesión zombi manualmente y regenerar QR
+app.get('/reset', async (req, res) => {
+    console.log('♻️ [Reset Manual] Purgando sesión y reiniciando cliente...');
+    try {
+        if (client) {
+            await client.destroy().catch(() => {});
+        }
+    } catch (e) {}
+
+    limpiarCarpetaSesion();
+    currentStatus = 'DISCONNECTED';
+    qrCodeBase64 = null;
+    connectedPhoneNumber = null;
+    connectedAtTimestamp = null;
+
+    setTimeout(() => {
+        inicializarCliente();
+    }, 2000);
+
+    return res.status(200).json({
+        status: 'RESETTING',
+        message: 'Sesión eliminada con éxito. Generando nuevo código QR en breve...'
+    });
+});
+
+// Endpoint de diagnóstico
+app.get('/diag/:id', async (req, res) => {
+    try {
+        if (!client || !client.pupPage) return res.status(503).json({ error: 'No client or page' });
+        const id = req.params.id;
+        const result = await client.pupPage.evaluate(async (searchId) => {
+            try {
+                const collections = window.require('WAWebCollections');
+                let target = collections.Msg.get(searchId);
+                if (!target) {
+                    const fetched = await collections.Msg.getMessagesById([searchId]).catch(e => ({ err: e?.message }));
+                    if (fetched && fetched.messages && fetched.messages.length > 0) {
+                        target = fetched.messages[0];
+                    }
+                }
+                if (!target) return { found: false, searchId };
+
+                return {
+                    found: true,
+                    id: target.id?._serialized || String(target.id),
+                    type: target.type,
+                    mimetype: target.mimetype,
+                    size: target.size
+                };
+            } catch (err) {
+                return { fatalEvalError: err.message };
+            }
+        }, id);
+        return res.json(result);
+    } catch (e) {
+        return res.status(500).json({ error: e.message });
+    }
 });
 
 // Endpoint de salida compatible con Spring Boot
@@ -318,19 +394,73 @@ app.post('/message/sendText/:instance', async (req, res) => {
     }
 });
 
+// Endpoint para redescargar multimedia
+app.all('/message/redownload/:msgId', async (req, res) => {
+    try {
+        const msgId = req.params.msgId;
+        console.log(`🔄 [Re-descarga manual solicitada] Buscando mensaje ID: ${msgId}`);
+        if (!client) {
+            return res.status(503).json({ error: 'Cliente de WhatsApp no inicializado' });
+        }
+        let freshMsg = await client.getMessageById(msgId).catch(() => null);
+        if (!freshMsg) {
+            return res.status(404).json({ error: 'Mensaje no encontrado en la sesión' });
+        }
+        const media = await descargarMediaConReintento(freshMsg, 4);
+        if (!media || !media.data) {
+            return res.status(500).json({ error: 'Fallo al descargar multimedia' });
+        }
+
+        const effectiveMime = media.mimetype || 'image/jpeg';
+        const dataUrl = `data:${effectiveMime};base64,${media.data}`;
+        const conversationText = `[VOUCHER] ${dataUrl}`;
+
+        const remoteJid = freshMsg.fromMe ? freshMsg.to : freshMsg.from;
+        const finalJid = await resolverJidTelefono(remoteJid);
+
+        const payload = {
+            event: 'messages.upsert',
+            instance: 'LocalBridge',
+            data: {
+                key: {
+                    remoteJid: finalJid,
+                    fromMe: freshMsg.fromMe,
+                    id: freshMsg.id.id
+                },
+                pushName: freshMsg._data?.notifyName || 'Cliente WhatsApp',
+                lid: remoteJid ? remoteJid.split('@')[0] : '',
+                message: {
+                    conversation: conversationText
+                },
+                messageType: 'image',
+                messageId: freshMsg.id.id
+            }
+        };
+
+        const resp = await axios.post(BACKEND_URL, payload, {
+            headers: { 'Content-Type': 'application/json; charset=utf-8' }
+        });
+
+        return res.status(200).json({ success: true, mime: effectiveMime, size: media.data.length, backendResp: resp.data });
+    } catch (e) {
+        console.error('❌ Error en re-descarga manual:', e.message);
+        return res.status(500).json({ error: e.message });
+    }
+});
+
 app.listen(PORT, () => {
     console.log('=====================================================');
     console.log(`🌐 Servidor del puente escuchando en puerto ${PORT}`);
-    console.log(`📡 URL configurada para webhooks: ${BACKEND_URL}`);
+    console.log(`📡 URL destino para Webhooks: ${BACKEND_URL}`);
     console.log('=====================================================');
 });
 
 process.on('unhandledRejection', (reason) => {
-    console.warn('⚠️ [Advertencia Global] Rejection no manejada:', reason);
+    console.warn('⚠️ [Advertencia Global] Rejection no manejada:', reason?.message || reason);
 });
 
 process.on('uncaughtException', (err) => {
-    console.warn('⚠️ [Advertencia Global] Excepción no capturada:', err.message || err);
+    console.warn('⚠️ [Advertencia Global] Excepción no capturada:', err?.message || err);
 });
 
 function inicializarCliente() {
@@ -386,7 +516,6 @@ function inicializarCliente() {
         }
     });
 
-    // Pasa de inmediato a CONNECTED para no dejar esperando al frontend
     client.on('authenticated', () => {
         currentStatus = 'CONNECTED';
         qrCodeBase64 = null;
@@ -405,6 +534,7 @@ function inicializarCliente() {
         }
         console.log('=====================================================');
         console.log('✅ ¡WhatsApp Web listo y conectado con éxito!');
+        console.log(`📡 Reenviando mensajes hacia: ${BACKEND_URL}`);
         console.log('=====================================================');
     });
 
@@ -418,7 +548,6 @@ function inicializarCliente() {
 
     client.on('message_create', async (msg) => {
         try {
-            // Si el cliente procesa mensajes, garantizar estado CONNECTED
             if (currentStatus !== 'CONNECTED') {
                 currentStatus = 'CONNECTED';
                 qrCodeBase64 = null;
@@ -531,7 +660,7 @@ function inicializarCliente() {
                 }
             })
             .then(response => {
-                console.log(`🚀 Webhook enviado con éxito. Respuesta del backend:`, response.data);
+                console.log(`🚀 Webhook enviado con éxito. Código HTTP: ${response.status}. Respuesta:`, response.data);
             })
             .catch(error => {
                 console.error('❌ Error enviando webhook al backend:', error.message);
@@ -551,19 +680,30 @@ function inicializarCliente() {
     client.on('auth_failure', (msg) => {
         currentStatus = 'DISCONNECTED';
         qrCodeBase64 = null;
+        connectedPhoneNumber = null;
+        connectedAtTimestamp = null;
         console.error('❌ Fallo de autenticación en WhatsApp:', msg);
+        limpiarCarpetaSesion();
         rebotarConexion();
     });
 
     client.on('disconnected', (reason) => {
         currentStatus = 'DISCONNECTED';
         qrCodeBase64 = null;
-        console.warn('❌ Desconectado de WhatsApp:', reason);
+        connectedPhoneNumber = null;
+        connectedAtTimestamp = null;
+        console.warn('❌ Desconectado de WhatsApp. Motivo:', reason);
+
+        // Si la sesión fue revocada en el teléfono o expiró, limpiar archivos para generar QR fresco
+        if (reason === 'LOGOUT' || reason === 'UNPAIRED' || reason === 'CONFLICT') {
+            console.log('🚪 Sesión revocada. Eliminando archivos residuales...');
+            limpiarCarpetaSesion();
+        }
         rebotarConexion();
     });
 
     client.initialize().catch(err => {
-        console.error('❌ Error crítico al inicializar cliente de WhatsApp Web:', err);
+        console.error('❌ Error crítico al inicializar cliente de WhatsApp Web:', err?.message || err);
         rebotarConexion();
     });
 }
@@ -572,11 +712,12 @@ function rebotarConexion() {
     if (isReconnecting) return;
     isReconnecting = true;
     console.log('🔄 Intentando reconexión en 5 segundos...');
-    setTimeout(() => {
+    setTimeout(async () => {
         if (client) {
             try {
-                client.destroy().catch(() => {});
+                await client.destroy().catch(() => {});
             } catch (e) {}
+            client = null;
         }
         inicializarCliente();
     }, 5000);
