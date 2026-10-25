@@ -38,3 +38,5 @@ puente-whatsapp/node_modules/
 puente-whatsapp/.wwebjs_cache/
 puente-whatsapp/.wwebjs_auth/
 puente-whatsapp/baileys_auth/
+azure_logs*
+
