@@ -33,6 +33,8 @@ public class DataInitializer {
             seedAdminIfNotExists(adminRepo, "Administrador", "admin@puntoycoma.com", encoder.encode("admin123"));
             seedAdminIfNotExists(adminRepo, "Jhoselin Díaz", "jhoselin@puntoycoma.com", encoder.encode("admin123"));
             seedAdminIfNotExists(adminRepo, "Jhoselin Díaz", "xvantx2@gmail.com", encoder.encode("admin123"));
+            seedAdminIfNotExists(adminRepo, "Jhoselin", "jhoselin@gmail.com", encoder.encode("admin123"));
+
 
             // 2. Usuarios del sistema para gestión de chats y auditoría
             seedUsuarioIfNotExists(usuarioRepo, "Admin Principal", "admin@puntoycoma.com", encoder.encode("admin123"), "ADMIN");
