@@ -15,7 +15,7 @@ const {
     extractMessageContent
 } = require('@whiskeysockets/baileys');
 
-// ── Configuración de logger silencioso/warnings para Baileys ────────────────
+// ── 3. Configuración de logger silencioso/warn para evitar saturación de logs ──
 const logger = pino({
     level: process.env.LOG_LEVEL || 'warn'
 });
@@ -48,6 +48,10 @@ let connectedAtTimestamp = null;
 
 // Caché de deduplicación en memoria para mensajes (Key: msgId, Value: timestamp)
 const processedMsgIds = new Map();
+
+// ── 1. Mapeos bidireccionales en memoria para Resolución LID <-> Teléfono ────
+const lidToPhoneMap = new Map();
+const phoneToLidMap = new Map();
 
 function isDuplicateMsg(msgId) {
     if (!msgId) return false;
@@ -102,18 +106,52 @@ async function inicializarCliente() {
             version: [2, 3000, 1015901307]
         }));
 
+        // ── 3. Configuración del socket para evitar Bad MAC y sincronización pesada ──
         sock = makeWASocket({
             version,
             auth: state,
             logger,
-            printQRInTerminal: false, // Manejado manualmente con qrcode-terminal y qrcode (Base64)
+            printQRInTerminal: false,
             browser: ['PuntoyComa Bridge', 'Chrome', '1.0.0'],
             generateHighQualityLinkPreview: false,
-            syncFullHistory: false
+            syncFullHistory: false, // Evita descargar chats antiguos que causan Bad MAC
+            getMessage: async (key) => {
+                // Permite a Baileys gestionar reintentos de cifrado sin lanzar Bad MAC
+                return undefined;
+            }
         });
 
         // Persistir cambios en las credenciales automáticamente
         sock.ev.on('creds.update', saveCreds);
+
+        // ── 1. Monitorear eventos de contactos para resolución LID <-> Teléfono ──
+        sock.ev.on('contacts.upsert', (contacts) => {
+            if (!contacts || !Array.isArray(contacts)) return;
+            for (const c of contacts) {
+                if (c.id && c.lid) {
+                    const phone = c.id.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+                    const lid = c.lid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+                    if (phone && lid) {
+                        lidToPhoneMap.set(lid, phone);
+                        phoneToLidMap.set(phone, lid);
+                    }
+                }
+            }
+        });
+
+        sock.ev.on('contacts.update', (contacts) => {
+            if (!contacts || !Array.isArray(contacts)) return;
+            for (const c of contacts) {
+                if (c.id && c.lid) {
+                    const phone = c.id.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+                    const lid = c.lid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+                    if (phone && lid) {
+                        lidToPhoneMap.set(lid, phone);
+                        phoneToLidMap.set(phone, lid);
+                    }
+                }
+            }
+        });
 
         // Monitorear cambios de conexión y emisión de QR
         sock.ev.on('connection.update', async (update) => {
@@ -202,17 +240,58 @@ async function inicializarCliente() {
                         continue;
                     }
 
-                    // Normalizar el JID a @c.us para mantener 100% de compatibilidad con Spring Boot y BD
-                    let cleanNumber = remoteJid.split('@')[0];
-                    if (cleanNumber.includes(':')) {
-                        cleanNumber = cleanNumber.split(':')[0];
+                    // ── 1. RESOLUCIÓN DE LID A NÚMERO TELEFÓNICO REAL Y NORMALIZACIÓN A @c.us ──
+                    let finalJid = '';
+                    let lid = '';
+
+                    if (remoteJid.endsWith('@lid') || remoteJid.includes('@lid')) {
+                        const rawLid = remoteJid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+                        lid = rawLid;
+
+                        // Intentar resolver el teléfono real del participante
+                        let resolvedPhone = null;
+                        const participantCandidate = m.key?.participant || m.participant;
+                        if (participantCandidate && (participantCandidate.endsWith('@s.whatsapp.net') || participantCandidate.endsWith('@c.us'))) {
+                            resolvedPhone = participantCandidate.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+                            lidToPhoneMap.set(rawLid, resolvedPhone);
+                            phoneToLidMap.set(resolvedPhone, rawLid);
+                            console.log(`✨ [Resolución LID] Mapeado vía participant: LID ${rawLid} -> Teléfono ${resolvedPhone}`);
+                        } else if (lidToPhoneMap.has(rawLid)) {
+                            resolvedPhone = lidToPhoneMap.get(rawLid);
+                            console.log(`✨ [Resolución LID] Encontrado en caché de contactos: LID ${rawLid} -> Teléfono ${resolvedPhone}`);
+                        }
+
+                        if (resolvedPhone) {
+                            finalJid = `${resolvedPhone}@c.us`;
+                        } else {
+                            // Coherencia: si aún no se tiene el teléfono, mantener estructura @c.us con el LID
+                            finalJid = `${rawLid}@c.us`;
+                            console.log(`ℹ️ [Resolución LID] Teléfono no resuelto para LID ${rawLid}, enviando ${finalJid}`);
+                        }
+                    } else if (remoteJid.endsWith('@s.whatsapp.net')) {
+                        // Limpiar número y transformar @s.whatsapp.net a @c.us
+                        const cleanNumber = remoteJid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+                        finalJid = `${cleanNumber}@c.us`;
+
+                        // Asociar LID si lo conocemos
+                        if (phoneToLidMap.has(cleanNumber)) {
+                            lid = phoneToLidMap.get(cleanNumber);
+                        } else if (m.key?.participant && m.key.participant.includes('@lid')) {
+                            lid = m.key.participant.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+                            lidToPhoneMap.set(lid, cleanNumber);
+                            phoneToLidMap.set(cleanNumber, lid);
+                        } else {
+                            lid = cleanNumber;
+                        }
+                    } else {
+                        // Formato directo @c.us u otro
+                        const cleanDigits = remoteJid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+                        finalJid = `${cleanDigits}@c.us`;
+                        lid = cleanDigits;
                     }
-                    cleanNumber = cleanNumber.replace(/[^0-9]/g, '');
-                    const finalJid = `${cleanNumber}@c.us`;
 
                     const fromMe = Boolean(m.key?.fromMe);
                     const pushName = m.pushName || (fromMe ? 'Administrador' : 'Cliente WhatsApp');
-                    const lid = remoteJid.split('@')[0];
 
                     // Desenvolver contenido (ephemeral, viewOnce, etc.)
                     const content = extractMessageContent(m.message);
@@ -286,10 +365,15 @@ async function inicializarCliente() {
                         continue;
                     }
 
+                    // ── 4. TIMESTAMP NUMÉRICO EN SEGUNDOS ──
+                    const currentTimestampSeconds = Math.floor(Date.now() / 1000);
+
                     // Estructura idéntica esperada por Spring Boot Webhook
                     const payload = {
                         event: 'messages.upsert',
                         instance: 'LocalBridge',
+                        date_time: new Date().toISOString(),
+                        timestamp: currentTimestampSeconds,
                         data: {
                             key: {
                                 remoteJid: finalJid,
@@ -302,7 +386,8 @@ async function inicializarCliente() {
                                 conversation: conversationText
                             },
                             messageType: messageType,
-                            messageId: msgId
+                            messageId: msgId,
+                            messageTimestamp: currentTimestampSeconds
                         }
                     };
 
@@ -311,7 +396,7 @@ async function inicializarCliente() {
                     if (logPreview.data?.message?.conversation?.startsWith('[VOUCHER] data:')) {
                         logPreview.data.message.conversation = logPreview.data.message.conversation.substring(0, 100) + '... [Base64 Truncado]';
                     }
-                    console.log(`📤 [Baileys -> Spring Boot] Enviando mensaje de ${finalJid} (fromMe: ${fromMe}):`, JSON.stringify(logPreview, null, 2));
+                    console.log(`📤 [Baileys -> Spring Boot] Mensaje de ${finalJid} (LID: ${lid} | fromMe: ${fromMe}):`, JSON.stringify(logPreview, null, 2));
 
                     axios.post(BACKEND_URL, payload, {
                         headers: {
@@ -423,40 +508,63 @@ app.get('/reset', async (req, res) => {
     });
 });
 
-// 4. Endpoint /message/sendText/:instance y /message/sendText (Envío de mensajes salientes desde Spring Boot)
+// ── 2. CORRECCIÓN DEL ENDPOINT DE SALIDA /message/sendText/:instance ─────────
 const enviarMensajeTexto = async (req, res) => {
     try {
-        const { number, textMessage, text: directText } = req.body;
+        const { number, jid: rawJid, textMessage, text: directText } = req.body;
+        const rawTarget = (number || rawJid || '').toString().trim();
         const text = textMessage?.text || directText || '';
 
-        if (!number || !text) {
-            return res.status(400).json({ error: 'Número y texto son requeridos' });
+        if (!rawTarget || !text) {
+            console.warn('⚠️ [Envío Rechazado] Parámetros incompletos en /message/sendText:', req.body);
+            return res.status(400).json({ error: 'Número/JID y texto son requeridos' });
         }
 
-        // Formatear JID para Baileys: {numero}@s.whatsapp.net
-        let jid = String(number).trim();
-        if (jid.endsWith('@s.whatsapp.net')) {
-            // Ya formateado
-        } else if (jid.endsWith('@c.us')) {
-            jid = jid.replace('@c.us', '@s.whatsapp.net');
+        // Determinar jidDestino compatible con Baileys
+        let jidDestino = '';
+
+        if (rawTarget.includes('@')) {
+            const [localPart, domainPart] = rawTarget.split('@');
+            const cleanDigits = localPart.split(':')[0].replace(/[^0-9]/g, '');
+
+            if (domainPart === 'c.us') {
+                // Si viene con @c.us: cambiar a @lid si tiene 15+ dígitos, sino a @s.whatsapp.net
+                jidDestino = (cleanDigits.length >= 15) ? `${cleanDigits}@lid` : `${cleanDigits}@s.whatsapp.net`;
+            } else if (domainPart === 'lid') {
+                jidDestino = `${cleanDigits}@lid`;
+            } else if (domainPart === 's.whatsapp.net') {
+                jidDestino = (cleanDigits.length >= 15) ? `${cleanDigits}@lid` : `${cleanDigits}@s.whatsapp.net`;
+            } else {
+                jidDestino = (cleanDigits.length >= 15) ? `${cleanDigits}@lid` : `${cleanDigits}@s.whatsapp.net`;
+            }
         } else {
-            const cleanDigits = jid.split('@')[0].replace(/[^0-9]/g, '');
-            jid = `${cleanDigits}@s.whatsapp.net`;
+            // Viene solo con dígitos numéricos
+            const cleanDigits = rawTarget.replace(/[^0-9]/g, '');
+            if (cleanDigits.length >= 15) {
+                // Es un LID
+                jidDestino = `${cleanDigits}@lid`;
+            } else {
+                // Es un número telefónico estándar (ej. 51933526011)
+                jidDestino = `${cleanDigits}@s.whatsapp.net`;
+            }
         }
 
-        console.log(`📤 [Envío Solicitado] Destinatario: ${jid} | Mensaje: "${text}"`);
+        console.log(`📤 [Envío Solicitado] Destino Original: "${rawTarget}" -> JID Destino: "${jidDestino}" | Mensaje: "${text}"`);
 
         if (!sock || currentStatus !== 'CONNECTED') {
+            console.error(`❌ [Error de Envío] El socket de WhatsApp no está conectado (Estado actual: ${currentStatus})`);
             return res.status(503).json({ error: 'El cliente de WhatsApp Web no está inicializado o conectado.' });
         }
 
-        const sentMsg = await sock.sendMessage(jid, { text });
+        // Envío efectivo vía Baileys
+        const sentMsg = await sock.sendMessage(jidDestino, { text });
         const msgId = sentMsg?.key?.id || `baileys-${Date.now()}`;
+        console.log(`✅ [Envío Exitoso] Mensaje entregado a WhatsApp | Destino: ${jidDestino} | ID: ${msgId}`);
 
         return res.status(200).json({
             key: {
                 id: msgId,
-                remoteJid: jid,
+                remoteJid: jidDestino,
                 fromMe: true
             },
             message: {
@@ -466,15 +574,18 @@ const enviarMensajeTexto = async (req, res) => {
         });
 
     } catch (err) {
-        console.error('❌ Error enviando mensaje por WhatsApp Baileys:', err.message);
-        return res.status(500).json({ error: err.message });
+        console.error('❌ [Error Detallado en /message/sendText]:', err);
+        return res.status(500).json({
+            error: err.message || 'Error desconocido al enviar mensaje',
+            details: String(err)
+        });
     }
 };
 
 app.post('/message/sendText/:instance', enviarMensajeTexto);
 app.post('/message/sendText', enviarMensajeTexto);
 
-// 5. Diagnóstico de salud y métricas del puente
+// Diagnóstico de salud y métricas del puente
 app.get('/health', (req, res) => {
     return res.status(200).json({
         engine: 'Baileys',
@@ -482,7 +593,8 @@ app.get('/health', (req, res) => {
         connected: currentStatus === 'CONNECTED',
         phoneNumber: connectedPhoneNumber,
         uptime: Math.round(process.uptime()),
-        memoryUsage: process.memoryUsage()
+        memoryUsage: process.memoryUsage(),
+        lidsCached: lidToPhoneMap.size
     });
 });
 
