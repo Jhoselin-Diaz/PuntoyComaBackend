@@ -52,6 +52,19 @@ let connectedAtTimestamp = null;
 // Caché de deduplicación en memoria para mensajes (Key: msgId, Value: timestamp)
 const processedMsgIds = new Map();
 
+// ── Almacén en memoria de mensajes recientes para reintentos criptográficos (Signal getMessage) ──
+const MAX_STORED_MESSAGES = 500;
+const messageStore = new Map();
+
+function guardarMensajeEnStore(key, message) {
+    if (!key?.id || !message) return;
+    if (messageStore.size >= MAX_STORED_MESSAGES) {
+        const firstKey = messageStore.keys().next().value;
+        messageStore.delete(firstKey);
+    }
+    messageStore.set(key.id, message);
+}
+
 // ── Mapeos en memoria con persistencia en disco para LID <-> Teléfono ────────
 const lidToPhoneMap = new Map();
 const phoneToLidMap = new Map();
@@ -198,7 +211,10 @@ async function inicializarCliente() {
             syncFullHistory: false, // Evita descargar chats antiguos que causan Bad MAC
             defaultQueryTimeoutMs: 60000, // Evita timeout en init queries
             getMessage: async (key) => {
-                // Permite a Baileys gestionar reintentos de cifrado sin corromper sesiones
+                // Almacén de mensajes para resolver reintentos de descifrado Signal (CIPHERTEXT retry)
+                if (key?.id && messageStore.has(key.id)) {
+                    return messageStore.get(key.id);
+                }
                 return undefined;
             }
         });
@@ -308,6 +324,10 @@ async function inicializarCliente() {
                     if (!m.message) continue;
 
                     const msgId = m.key?.id;
+                    if (msgId && m.message) {
+                        guardarMensajeEnStore(m.key, m.message);
+                    }
+
                     if (isDuplicateMsg(msgId)) {
                         continue;
                     }
@@ -641,6 +661,9 @@ const enviarMensajeTexto = async (req, res) => {
         // Envío efectivo vía Baileys
         const sentMsg = await sock.sendMessage(jidDestino, { text });
         const msgId = sentMsg?.key?.id || `baileys-${Date.now()}`;
+        if (sentMsg?.key && sentMsg?.message) {
+            guardarMensajeEnStore(sentMsg.key, sentMsg.message);
+        }
         console.log(`✅ [Envío Exitoso] Mensaje entregado a WhatsApp | Destino: ${jidDestino} | ID: ${msgId}`);
 
         return res.status(200).json({

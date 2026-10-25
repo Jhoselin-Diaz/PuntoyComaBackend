@@ -884,6 +884,46 @@ public class OpenAiService {
                         String dirEx = datosExtraidos.direccionExacta;
                         String ref = datosExtraidos.referencia;
 
+                        // ── Auto-migración y normalización si el chat actual tiene un identificador LID ──
+                        String telExtraido = (telVal != null) ? telVal.replaceAll("[^0-9]", "") : "";
+                        if (!telExtraido.isEmpty()) {
+                            String telNormalizado = telExtraido;
+                            if (telExtraido.length() == 9) {
+                                telNormalizado = "51" + telExtraido;
+                            } else if (telExtraido.startsWith("51") && telExtraido.length() == 11) {
+                                telNormalizado = telExtraido;
+                            }
+
+                            String telChatActual = chat.getTelefonoCliente();
+                            if (telChatActual != null && (telChatActual.length() >= 13 || telChatActual.contains("@lid")) && !telChatActual.equals(telNormalizado)) {
+                                log.info("[OpenAI Service] 🔄 Detectado chat con LID ({}). Migrando a teléfono celular real normalizado: {}", telChatActual, telNormalizado);
+                                java.util.Optional<Chat> chatConReal = chatRepository.findByTelefonoCliente(telNormalizado);
+                                if (chatConReal.isEmpty()) {
+                                    chat.setTelefonoCliente(telNormalizado);
+                                    if (chat.getUsuario() != null) {
+                                        chat.getUsuario().setTelefono(telNormalizado);
+                                        usuarioRepository.save(chat.getUsuario());
+                                    }
+                                    chatRepository.save(chat);
+                                    log.info("[OpenAI Service] ✅ Chat ID {} actualizado exitosamente al teléfono: {}", chat.getId(), telNormalizado);
+                                } else {
+                                    log.info("[OpenAI Service] Ya existe chat ID {} con teléfono {}. Se mantiene referencia.", chatConReal.get().getId(), telNormalizado);
+                                }
+                            }
+                        }
+
+                        // Actualizar nombre del cliente si es genérico
+                        if (nomComp != null && !nomComp.isEmpty() && !"Cliente".equalsIgnoreCase(nomComp) && !"Cliente WhatsApp".equalsIgnoreCase(nomComp)) {
+                            if (chat.getNombreCliente() == null || chat.getNombreCliente().equalsIgnoreCase("Cliente Nuevo") || chat.getNombreCliente().equalsIgnoreCase("Cliente WhatsApp")) {
+                                chat.setNombreCliente(nomComp);
+                                if (chat.getUsuario() != null && (chat.getUsuario().getNombre() == null || chat.getUsuario().getNombre().contains("Cliente"))) {
+                                    chat.getUsuario().setNombre(nomComp);
+                                    usuarioRepository.save(chat.getUsuario());
+                                }
+                                chatRepository.save(chat);
+                            }
+                        }
+
                         boolean tieneCalle = !dirEx.isEmpty();
                         boolean tieneGeo = !dist.isEmpty() || !prov.isEmpty() || !depto.isEmpty();
                         boolean direccionValida = tieneCalle && (tieneGeo || dirEx.length() >= 15);
