@@ -1,3 +1,5 @@
+process.env.TZ = 'America/Lima';
+
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
@@ -15,7 +17,7 @@ const {
     extractMessageContent
 } = require('@whiskeysockets/baileys');
 
-// ── 3. Configuración de logger silencioso/warn para evitar saturación de logs ──
+// ── Configuración de logger silencioso/warn para evitar saturación de logs ──
 const logger = pino({
     level: process.env.LOG_LEVEL || 'warn'
 });
@@ -37,6 +39,7 @@ const PORT = process.env.PORT || 3001;
 
 // Carpeta de persistencia para credenciales de Baileys
 const AUTH_DIR = path.join(__dirname, 'baileys_auth');
+const LID_MAP_FILE = path.join(AUTH_DIR, 'lid_map.json');
 
 // ── Estado global en memoria para consulta del backend y frontend ────────────
 let currentStatus = 'DISCONNECTED'; // 'DISCONNECTED', 'CONNECTING', 'QR_READY', 'CONNECTED'
@@ -49,9 +52,85 @@ let connectedAtTimestamp = null;
 // Caché de deduplicación en memoria para mensajes (Key: msgId, Value: timestamp)
 const processedMsgIds = new Map();
 
-// ── 1. Mapeos bidireccionales en memoria para Resolución LID <-> Teléfono ────
+// ── Mapeos en memoria con persistencia en disco para LID <-> Teléfono ────────
 const lidToPhoneMap = new Map();
 const phoneToLidMap = new Map();
+
+function cargarLidMap() {
+    try {
+        if (fs.existsSync(LID_MAP_FILE)) {
+            const raw = fs.readFileSync(LID_MAP_FILE, 'utf8');
+            const data = JSON.parse(raw);
+            if (data && typeof data === 'object') {
+                for (const [lid, phone] of Object.entries(data)) {
+                    if (lid && phone) {
+                        const cleanLid = String(lid).replace(/[^0-9]/g, '');
+                        const cleanPhone = String(phone).replace(/[^0-9]/g, '');
+                        lidToPhoneMap.set(cleanLid, cleanPhone);
+                        phoneToLidMap.set(cleanPhone, cleanLid);
+                    }
+                }
+                console.log(`📂 [LID Persistencia] Cargadas ${lidToPhoneMap.size} asociaciones LID <-> Teléfono desde disco.`);
+            }
+        }
+    } catch (e) {
+        console.warn('⚠️ [LID Persistencia] Error al leer lid_map.json:', e.message);
+    }
+}
+
+function guardarLidMap() {
+    try {
+        if (!fs.existsSync(AUTH_DIR)) {
+            fs.mkdirSync(AUTH_DIR, { recursive: true });
+        }
+        const obj = {};
+        for (const [lid, phone] of lidToPhoneMap.entries()) {
+            obj[lid] = phone;
+        }
+        fs.writeFileSync(LID_MAP_FILE, JSON.stringify(obj, null, 2), 'utf8');
+    } catch (e) {
+        console.warn('⚠️ [LID Persistencia] Error al guardar lid_map.json:', e.message);
+    }
+}
+
+function registrarAsociacionLid(lid, phone) {
+    if (!lid || !phone) return;
+    const cleanLid = String(lid).split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+    const cleanPhone = String(phone).split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+    if (!cleanLid || !cleanPhone || cleanLid === cleanPhone) return;
+
+    const existing = lidToPhoneMap.get(cleanLid);
+    if (existing !== cleanPhone) {
+        lidToPhoneMap.set(cleanLid, cleanPhone);
+        phoneToLidMap.set(cleanPhone, cleanLid);
+        console.log(`✨ [LID Persistente] Registrada asociación LID ${cleanLid} <-> Teléfono ${cleanPhone}`);
+        guardarLidMap();
+    }
+}
+
+function extraerTelefonoReal(m, lidUser) {
+    // 1) m.key.senderPn (proporcionado por decodificación XML de Baileys)
+    if (m?.key?.senderPn) {
+        const clean = m.key.senderPn.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+        if (clean) return clean;
+    }
+    // 2) m.key.participantPn
+    if (m?.key?.participantPn) {
+        const clean = m.key.participantPn.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+        if (clean) return clean;
+    }
+    // 3) m.key.participant / m.participant (si es @s.whatsapp.net o @c.us)
+    const participant = m?.key?.participant || m?.participant;
+    if (participant && (participant.endsWith('@s.whatsapp.net') || participant.endsWith('@c.us'))) {
+        const clean = participant.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+        if (clean) return clean;
+    }
+    // 4) lidToPhoneMap.get(lidUser)
+    if (lidUser && lidToPhoneMap.has(lidUser)) {
+        return lidToPhoneMap.get(lidUser);
+    }
+    return null;
+}
 
 function isDuplicateMsg(msgId) {
     if (!msgId) return false;
@@ -101,12 +180,14 @@ async function inicializarCliente() {
             fs.mkdirSync(AUTH_DIR, { recursive: true });
         }
 
+        // Cargar mapa persistente de LIDs
+        cargarLidMap();
+
         const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
         const { version } = await fetchLatestBaileysVersion().catch(() => ({
             version: [2, 3000, 1015901307]
         }));
 
-        // ── 3. Configuración del socket para evitar Bad MAC y sincronización pesada ──
         sock = makeWASocket({
             version,
             auth: state,
@@ -115,8 +196,9 @@ async function inicializarCliente() {
             browser: ['PuntoyComa Bridge', 'Chrome', '1.0.0'],
             generateHighQualityLinkPreview: false,
             syncFullHistory: false, // Evita descargar chats antiguos que causan Bad MAC
+            defaultQueryTimeoutMs: 60000, // Evita timeout en init queries
             getMessage: async (key) => {
-                // Permite a Baileys gestionar reintentos de cifrado sin lanzar Bad MAC
+                // Permite a Baileys gestionar reintentos de cifrado sin corromper sesiones
                 return undefined;
             }
         });
@@ -124,17 +206,20 @@ async function inicializarCliente() {
         // Persistir cambios en las credenciales automáticamente
         sock.ev.on('creds.update', saveCreds);
 
-        // ── 1. Monitorear eventos de contactos para resolución LID <-> Teléfono ──
+        // ── Registro de LIDs vía chats.phoneNumberShare ─────────────────────
+        sock.ev.on('chats.phoneNumberShare', ({ lid, jid }) => {
+            if (lid && jid) {
+                console.log(`📡 [chats.phoneNumberShare] Notificación recibida: LID ${lid} <-> JID ${jid}`);
+                registrarAsociacionLid(lid, jid);
+            }
+        });
+
+        // ── Registro de LIDs vía contacts.upsert / contacts.update ─────────
         sock.ev.on('contacts.upsert', (contacts) => {
             if (!contacts || !Array.isArray(contacts)) return;
             for (const c of contacts) {
                 if (c.id && c.lid) {
-                    const phone = c.id.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
-                    const lid = c.lid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
-                    if (phone && lid) {
-                        lidToPhoneMap.set(lid, phone);
-                        phoneToLidMap.set(phone, lid);
-                    }
+                    registrarAsociacionLid(c.lid, c.id);
                 }
             }
         });
@@ -143,12 +228,7 @@ async function inicializarCliente() {
             if (!contacts || !Array.isArray(contacts)) return;
             for (const c of contacts) {
                 if (c.id && c.lid) {
-                    const phone = c.id.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
-                    const lid = c.lid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
-                    if (phone && lid) {
-                        lidToPhoneMap.set(lid, phone);
-                        phoneToLidMap.set(phone, lid);
-                    }
+                    registrarAsociacionLid(c.lid, c.id);
                 }
             }
         });
@@ -240,46 +320,42 @@ async function inicializarCliente() {
                         continue;
                     }
 
-                    // ── 1. RESOLUCIÓN DE LID A NÚMERO TELEFÓNICO REAL Y NORMALIZACIÓN A @c.us ──
+                    // ── RESOLUCIÓN DE LID A NÚMERO TELEFÓNICO REAL Y NORMALIZACIÓN A @c.us ──
                     let finalJid = '';
                     let lid = '';
 
                     if (remoteJid.endsWith('@lid') || remoteJid.includes('@lid')) {
-                        const rawLid = remoteJid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
-                        lid = rawLid;
+                        const lidUser = remoteJid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+                        lid = lidUser;
 
-                        // Intentar resolver el teléfono real del participante
-                        let resolvedPhone = null;
-                        const participantCandidate = m.key?.participant || m.participant;
-                        if (participantCandidate && (participantCandidate.endsWith('@s.whatsapp.net') || participantCandidate.endsWith('@c.us'))) {
-                            resolvedPhone = participantCandidate.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
-                            lidToPhoneMap.set(rawLid, resolvedPhone);
-                            phoneToLidMap.set(resolvedPhone, rawLid);
-                            console.log(`✨ [Resolución LID] Mapeado vía participant: LID ${rawLid} -> Teléfono ${resolvedPhone}`);
-                        } else if (lidToPhoneMap.has(rawLid)) {
-                            resolvedPhone = lidToPhoneMap.get(rawLid);
-                            console.log(`✨ [Resolución LID] Encontrado en caché de contactos: LID ${rawLid} -> Teléfono ${resolvedPhone}`);
-                        }
+                        // Extraer teléfono real revisando en orden:
+                        // 1) m.key.senderPn
+                        // 2) m.key.participantPn
+                        // 3) m.key.participant / m.participant
+                        // 4) lidToPhoneMap.get(lidUser)
+                        const realPhone = extraerTelefonoReal(m, lidUser);
 
-                        if (resolvedPhone) {
-                            finalJid = `${resolvedPhone}@c.us`;
+                        if (realPhone) {
+                            registrarAsociacionLid(lidUser, realPhone);
+                            finalJid = `${realPhone}@c.us`;
+                            console.log(`✨ [Resolución LID Exitosa] LID ${lidUser} resuelto a teléfono ${realPhone} -> ${finalJid}`);
                         } else {
-                            // Coherencia: si aún no se tiene el teléfono, mantener estructura @c.us con el LID
-                            finalJid = `${rawLid}@c.us`;
-                            console.log(`ℹ️ [Resolución LID] Teléfono no resuelto para LID ${rawLid}, enviando ${finalJid}`);
+                            finalJid = `${lidUser}@c.us`;
+                            console.log(`ℹ️ [Resolución LID Pendiente] Teléfono aún no resuelto para LID ${lidUser}, enviando ${finalJid}`);
                         }
                     } else if (remoteJid.endsWith('@s.whatsapp.net')) {
                         // Limpiar número y transformar @s.whatsapp.net a @c.us
                         const cleanNumber = remoteJid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
                         finalJid = `${cleanNumber}@c.us`;
 
-                        // Asociar LID si lo conocemos
-                        if (phoneToLidMap.has(cleanNumber)) {
+                        // Si el mensaje trajo senderLid o participantLid, asociar de inmediato
+                        const senderLid = m.key?.senderLid || (m.key?.participant && m.key.participant.includes('@lid') ? m.key.participant : null);
+                        if (senderLid) {
+                            const cleanLid = senderLid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+                            registrarAsociacionLid(cleanLid, cleanNumber);
+                            lid = cleanLid;
+                        } else if (phoneToLidMap.has(cleanNumber)) {
                             lid = phoneToLidMap.get(cleanNumber);
-                        } else if (m.key?.participant && m.key.participant.includes('@lid')) {
-                            lid = m.key.participant.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
-                            lidToPhoneMap.set(lid, cleanNumber);
-                            phoneToLidMap.set(cleanNumber, lid);
                         } else {
                             lid = cleanNumber;
                         }
@@ -365,7 +441,7 @@ async function inicializarCliente() {
                         continue;
                     }
 
-                    // ── 4. TIMESTAMP NUMÉRICO EN SEGUNDOS ──
+                    // Timestamp numérico actual en segundos
                     const currentTimestampSeconds = Math.floor(Date.now() / 1000);
 
                     // Estructura idéntica esperada por Spring Boot Webhook
@@ -508,7 +584,7 @@ app.get('/reset', async (req, res) => {
     });
 });
 
-// ── 2. CORRECCIÓN DEL ENDPOINT DE SALIDA /message/sendText/:instance ─────────
+// ── 4. Endpoint de Salida /message/sendText/:instance y /message/sendText ──
 const enviarMensajeTexto = async (req, res) => {
     try {
         const { number, jid: rawJid, textMessage, text: directText } = req.body;
@@ -520,33 +596,39 @@ const enviarMensajeTexto = async (req, res) => {
             return res.status(400).json({ error: 'Número/JID y texto son requeridos' });
         }
 
-        // Determinar jidDestino compatible con Baileys
-        let jidDestino = '';
+        // Determinar si es LID y calcular jidDestino
+        let cleanDigits = '';
+        let isLid = false;
 
         if (rawTarget.includes('@')) {
             const [localPart, domainPart] = rawTarget.split('@');
-            const cleanDigits = localPart.split(':')[0].replace(/[^0-9]/g, '');
+            cleanDigits = localPart.split(':')[0].replace(/[^0-9]/g, '');
+            isLid = (domainPart === 'lid') || (cleanDigits.length >= 15);
+        } else {
+            cleanDigits = rawTarget.replace(/[^0-9]/g, '');
+            isLid = (cleanDigits.length >= 15);
+        }
 
-            if (domainPart === 'c.us') {
-                // Si viene con @c.us: cambiar a @lid si tiene 15+ dígitos, sino a @s.whatsapp.net
-                jidDestino = (cleanDigits.length >= 15) ? `${cleanDigits}@lid` : `${cleanDigits}@s.whatsapp.net`;
-            } else if (domainPart === 'lid') {
-                jidDestino = `${cleanDigits}@lid`;
-            } else if (domainPart === 's.whatsapp.net') {
-                jidDestino = (cleanDigits.length >= 15) ? `${cleanDigits}@lid` : `${cleanDigits}@s.whatsapp.net`;
+        let jidDestino = '';
+
+        if (isLid) {
+            // Si es un LID, verificar primero si existe su teléfono real en lidToPhoneMap
+            if (lidToPhoneMap.has(cleanDigits)) {
+                const realPhone = lidToPhoneMap.get(cleanDigits);
+                jidDestino = `${realPhone}@s.whatsapp.net`;
+                console.log(`🔀 [Envío Desvío LID -> Teléfono Real] Destino original ${rawTarget} resuelto a teléfono ${realPhone} -> ${jidDestino}`);
             } else {
-                jidDestino = (cleanDigits.length >= 15) ? `${cleanDigits}@lid` : `${cleanDigits}@s.whatsapp.net`;
+                jidDestino = `${cleanDigits}@lid`;
+                console.log(`⚠️ [Envío a LID Directo] Teléfono no conocido para LID ${cleanDigits}, ejecutando assertSessions...`);
+                if (sock && typeof sock.assertSessions === 'function') {
+                    await sock.assertSessions([jidDestino], true).catch((errSession) => {
+                        console.warn(`⚠️ [assertSessions] Advertencia al validar sesión de ${jidDestino}:`, errSession.message);
+                    });
+                }
             }
         } else {
-            // Viene solo con dígitos numéricos
-            const cleanDigits = rawTarget.replace(/[^0-9]/g, '');
-            if (cleanDigits.length >= 15) {
-                // Es un LID
-                jidDestino = `${cleanDigits}@lid`;
-            } else {
-                // Es un número telefónico estándar (ej. 51933526011)
-                jidDestino = `${cleanDigits}@s.whatsapp.net`;
-            }
+            // Es un número telefónico estándar
+            jidDestino = `${cleanDigits}@s.whatsapp.net`;
         }
 
         console.log(`📤 [Envío Solicitado] Destino Original: "${rawTarget}" -> JID Destino: "${jidDestino}" | Mensaje: "${text}"`);

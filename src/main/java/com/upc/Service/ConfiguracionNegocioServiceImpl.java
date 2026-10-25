@@ -8,7 +8,11 @@ import org.springframework.stereotype.Service;
 @Service
 public class ConfiguracionNegocioServiceImpl implements ConfiguracionNegocioService {
 
-   
+    @org.springframework.beans.factory.annotation.Value("${supabase.url:https://muozenxfcbddxpjnbhsx.supabase.co}")
+    private String supabaseUrl;
+
+    @org.springframework.beans.factory.annotation.Value("${supabase.key:}")
+    private String supabaseKey;
 
     @Autowired
     private ConfiguracionNegocioRepository repository;
