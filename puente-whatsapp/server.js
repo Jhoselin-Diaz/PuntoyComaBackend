@@ -14,7 +14,8 @@ const {
     DisconnectReason,
     fetchLatestBaileysVersion,
     downloadMediaMessage,
-    extractMessageContent
+    extractMessageContent,
+    jidNormalizedUser
 } = require('@whiskeysockets/baileys');
 
 // ── Configuración de logger silencioso/warn para evitar saturación de logs ──
@@ -37,9 +38,65 @@ if (!rawBackendUrl.endsWith('/webhook') && !rawBackendUrl.includes('/api/')) {
 const BACKEND_URL = rawBackendUrl;
 const PORT = process.env.PORT || 3001;
 
-// Carpeta de persistencia para credenciales de Baileys
-const AUTH_DIR = path.join(__dirname, 'baileys_auth');
+// Carpeta de persistencia para credenciales de Baileys (Persistencia real en Azure en /home/baileys_auth)
+const LOCAL_AUTH_DIR = path.join(__dirname, 'baileys_auth');
+const AZURE_AUTH_DIR = '/home/baileys_auth';
+const AUTH_DIR = process.env.WEBSITE_SITE_NAME ? AZURE_AUTH_DIR : LOCAL_AUTH_DIR;
 const LID_MAP_FILE = path.join(AUTH_DIR, 'lid_map.json');
+
+// Lógica de arranque segura: copiar credenciales existentes si se migra a /home/baileys_auth
+function migrarCredencialesAzureSiAplica() {
+    try {
+        if (process.env.WEBSITE_SITE_NAME) {
+            if (!fs.existsSync(AZURE_AUTH_DIR)) {
+                fs.mkdirSync(AZURE_AUTH_DIR, { recursive: true });
+                console.log('📁 [Persistencia Azure] Creado directorio persistente /home/baileys_auth');
+            }
+            const azureCreds = path.join(AZURE_AUTH_DIR, 'creds.json');
+            const localCreds = path.join(LOCAL_AUTH_DIR, 'creds.json');
+            if (!fs.existsSync(azureCreds) && fs.existsSync(localCreds)) {
+                console.log('📦 [Migración de Sesión] Copiando credenciales de /app/baileys_auth a /home/baileys_auth...');
+                const files = fs.readdirSync(LOCAL_AUTH_DIR);
+                for (const file of files) {
+                    const src = path.join(LOCAL_AUTH_DIR, file);
+                    const dest = path.join(AZURE_AUTH_DIR, file);
+                    if (fs.statSync(src).isFile()) {
+                        fs.copyFileSync(src, dest);
+                    }
+                }
+                console.log('✅ [Migración de Sesión] Sesión migrada exitosamente a /home/baileys_auth.');
+            }
+        }
+    } catch (e) {
+        console.warn('⚠️ [Migración de Sesión] Error intentando migrar credenciales:', e.message);
+    }
+}
+
+// ── Implementación de CacheStore en memoria compatible con Baileys (TTL) ──
+function createMemoryCacheStore(ttlMs = 3600000) {
+    const store = new Map();
+    return {
+        get(key) {
+            const entry = store.get(key);
+            if (!entry) return undefined;
+            if (Date.now() > entry.expiry) {
+                store.delete(key);
+                return undefined;
+            }
+            return entry.value;
+        },
+        set(key, value) {
+            store.set(key, { value, expiry: Date.now() + ttlMs });
+        },
+        del(key) {
+            store.delete(key);
+        },
+        flushAll() {
+            store.clear();
+        }
+    };
+}
+const msgRetryCounterCache = createMemoryCacheStore(3600000);
 
 // ── Estado global en memoria para consulta del backend y frontend ────────────
 let currentStatus = 'DISCONNECTED'; // 'DISCONNECTED', 'CONNECTING', 'QR_READY', 'CONNECTED'
@@ -62,7 +119,9 @@ function guardarMensajeEnStore(key, message) {
         const firstKey = messageStore.keys().next().value;
         messageStore.delete(firstKey);
     }
-    messageStore.set(key.id, message);
+    // Asegurar guardar siempre el objeto proto.IMessage puro
+    const protoMsg = message?.message ? message.message : message;
+    messageStore.set(key.id, protoMsg);
 }
 
 // ── Mapeos en memoria con persistencia en disco para LID <-> Teléfono ────────
@@ -188,6 +247,9 @@ async function inicializarCliente() {
     console.log('=====================================================');
 
     try {
+        // Ejecutar migración inicial segura a /home/baileys_auth si corre en Azure
+        migrarCredencialesAzureSiAplica();
+
         // Asegurar que la carpeta de credenciales existe
         if (!fs.existsSync(AUTH_DIR)) {
             fs.mkdirSync(AUTH_DIR, { recursive: true });
@@ -209,11 +271,14 @@ async function inicializarCliente() {
             browser: ['PuntoyComa Bridge', 'Chrome', '1.0.0'],
             generateHighQualityLinkPreview: false,
             syncFullHistory: false, // Evita descargar chats antiguos que causan Bad MAC
+            shouldSyncHistoryMessage: () => false, // Evita sincronizar mensajes antiguos que corrompen sesiones Signal
+            msgRetryCounterCache,
             defaultQueryTimeoutMs: 60000, // Evita timeout en init queries
             getMessage: async (key) => {
                 // Almacén de mensajes para resolver reintentos de descifrado Signal (CIPHERTEXT retry)
                 if (key?.id && messageStore.has(key.id)) {
-                    return messageStore.get(key.id);
+                    const rawMsg = messageStore.get(key.id);
+                    return rawMsg?.message ? rawMsg.message : rawMsg;
                 }
                 return undefined;
             }
@@ -634,9 +699,10 @@ const enviarMensajeTexto = async (req, res) => {
         if (isLid) {
             // Si es un LID, verificar primero si existe su teléfono real en lidToPhoneMap
             if (lidToPhoneMap.has(cleanDigits)) {
-                const realPhone = lidToPhoneMap.get(cleanDigits);
-                jidDestino = `${realPhone}@s.whatsapp.net`;
-                console.log(`🔀 [Envío Desvío LID -> Teléfono Real] Destino original ${rawTarget} resuelto a teléfono ${realPhone} -> ${jidDestino}`);
+                let realPhone = lidToPhoneMap.get(cleanDigits);
+                if (realPhone.length === 9) realPhone = '51' + realPhone;
+                jidDestino = jidNormalizedUser(`${realPhone}@s.whatsapp.net`);
+                console.log(`🔀 [Envío Desvío LID -> Teléfono Real] Destino original "${rawTarget}" resuelto a teléfono ${realPhone} -> ${jidDestino}`);
             } else {
                 jidDestino = `${cleanDigits}@lid`;
                 console.log(`⚠️ [Envío a LID Directo] Teléfono no conocido para LID ${cleanDigits}, ejecutando assertSessions...`);
@@ -647,8 +713,12 @@ const enviarMensajeTexto = async (req, res) => {
                 }
             }
         } else {
-            // Es un número telefónico estándar
-            jidDestino = `${cleanDigits}@s.whatsapp.net`;
+            // Es un número telefónico estándar: asegurar prefijo internacional peruano si tiene 9 dígitos
+            let formattedNumber = cleanDigits;
+            if (formattedNumber.length === 9) {
+                formattedNumber = '51' + formattedNumber;
+            }
+            jidDestino = jidNormalizedUser(`${formattedNumber}@s.whatsapp.net`);
         }
 
         console.log(`📤 [Envío Solicitado] Destino Original: "${rawTarget}" -> JID Destino: "${jidDestino}" | Mensaje: "${text}"`);
@@ -661,8 +731,12 @@ const enviarMensajeTexto = async (req, res) => {
         // Envío efectivo vía Baileys
         const sentMsg = await sock.sendMessage(jidDestino, { text });
         const msgId = sentMsg?.key?.id || `baileys-${Date.now()}`;
+        
+        // Guardar inmediatamente en messageStore para resolver cualquier retry instantáneo
         if (sentMsg?.key && sentMsg?.message) {
             guardarMensajeEnStore(sentMsg.key, sentMsg.message);
+        } else if (msgId) {
+            guardarMensajeEnStore({ id: msgId }, { conversation: text });
         }
         console.log(`✅ [Envío Exitoso] Mensaje entregado a WhatsApp | Destino: ${jidDestino} | ID: ${msgId}`);
 
