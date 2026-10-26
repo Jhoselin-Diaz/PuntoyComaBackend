@@ -29,7 +29,7 @@ public class ConciliacionVoucherService {
 
     private static final Logger log = LoggerFactory.getLogger(ConciliacionVoucherService.class);
 
-    @Autowired
+    @Autowired(required = false)
     private OcrService ocrService;
 
     @Autowired
@@ -45,7 +45,7 @@ public class ConciliacionVoucherService {
     @Autowired
     private OpenAiService openAiService;
 
-    @Value("${supabase.url}")
+    @Value("${supabase.url:https://ufrxztsplpmfflopojid.supabase.co}")
     private String supabaseUrl;
 
     @Value("${supabase.key:}")
@@ -57,10 +57,10 @@ public class ConciliacionVoucherService {
     @Autowired
     private org.springframework.transaction.support.TransactionTemplate transactionTemplate;
 
-    @Value("${openai.api-key}")
+    @Value("${openai.api-key:}")
     private String apiKey;
 
-    @Value("${openai.api-url}")
+    @Value("${openai.api-url:https://api.openai.com/v1/chat/completions}")
     private String apiUrl;
 
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();

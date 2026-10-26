@@ -18,7 +18,7 @@ public class OcrServiceImpl implements OcrService {
 
     private static final Logger log = LoggerFactory.getLogger(OcrServiceImpl.class);
 
-    @Value("${tesseract.datapath}")
+    @Value("${tesseract.datapath:}")
     private String datapath;
 
     @Override

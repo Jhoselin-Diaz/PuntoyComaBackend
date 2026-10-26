@@ -22,4 +22,9 @@ public class AppConfig {
     public RestTemplate restTemplate() {
         return new RestTemplate();
     }
+
+    @Bean
+    public com.upc.Service.OcrService ocrService() {
+        return new com.upc.Service.OcrServiceImpl();
+    }
 }
