@@ -171,24 +171,7 @@ public class ConciliacionVoucherService {
                         return;
                     }
 
-                    // Guardar en archivo temporal
-                    tempFile = File.createTempFile("voucher_", extension);
-                    try (FileOutputStream fos = new FileOutputStream(tempFile)) {
-                        fos.write(imageBytes);
-                    }
-
-                    // 3. Ejecutar OCR
-                    String textoExtraido = ocrService.extraerTextoDeImagen(tempFile);
-                    if (textoExtraido == null || textoExtraido.trim().isEmpty()) {
-                        log.warn("[ConciliacionVoucherService] OCR no extrajo texto de la imagen.");
-                        return;
-                    }
-
-                    // 4. Procesar el texto con expresiones regulares y la imagen en Base64
-                    String base64Image = Base64.getEncoder().encodeToString(imageBytes);
-                    DatosVoucher datos = procesarTexto(textoExtraido, base64Image, contentType);
-
-                    // 5. Subir a Supabase Storage para tener una URL permanente y accesible
+                    // 3. Subir a Supabase Storage PRIMERO para garantizar una URL pública y permanente
                     voucherUrl = subirVoucherASupabase(imageBytes, contentType, extension);
                     if (voucherUrl == null) {
                         voucherUrl = cleanContenidoVoucher.length() > 500 ? cleanContenidoVoucher.substring(0, 500) : cleanContenidoVoucher;
@@ -199,6 +182,22 @@ public class ConciliacionVoucherService {
                         log.warn("[ConciliacionVoucherService] Deduplicación: VoucherUrl ya fue registrado en el pedido ID {}. Se ignora.", pedido.getId());
                         return;
                     }
+
+                    // 4. Ejecutar OCR local (Tesseract) como soporte preliminar sin bloquear
+                    String textoExtraido = "";
+                    try {
+                        tempFile = File.createTempFile("voucher_", extension);
+                        try (FileOutputStream fos = new FileOutputStream(tempFile)) {
+                            fos.write(imageBytes);
+                        }
+                        textoExtraido = ocrService.extraerTextoDeImagen(tempFile);
+                    } catch (Throwable t) {
+                        log.warn("[ConciliacionVoucherService] Tesseract no disponible ({}), delegando a OpenAI Vision.", t.getMessage());
+                    }
+
+                    // 5. Procesar la imagen con OpenAI GPT-4o-mini Vision (motor principal) + Regex de respaldo
+                    String base64Image = Base64.getEncoder().encodeToString(imageBytes);
+                    DatosVoucher datos = procesarTexto(textoExtraido != null ? textoExtraido : "", base64Image, contentType);
 
                     // 6. VERIFICAR AUTORIZACIÓN DE VOUCHERS ADICIONALES (FUENTE DE VERDAD BD: Pedido.estadoPago)
                     List<PagoVoucher> vouchersExistentes = pagoVoucherRepository.findByPedidoIdOrderByFechaPagoAsc(pedido.getId());
@@ -325,94 +324,95 @@ public class ConciliacionVoucherService {
     }
 
     public DatosVoucher procesarTexto(String textoCrudo, String base64Image, String contentType) {
-        log.info("[ConciliacionVoucherService] Iniciando análisis de texto OCR...");
-        DatosVoucher datos = new DatosVoucher();
+        log.info("[ConciliacionVoucherService] Iniciando análisis del comprobante con motor principal OpenAI GPT-4o-mini Vision...");
+        DatosVoucher datos = null;
 
-        // 1. Extraer Monto
-        datos.monto = extraerMonto(textoCrudo);
+        // 1. MOTOR PRINCIPAL: OpenAI GPT-4o-mini Vision sobre la imagen directa
+        if (base64Image != null && !base64Image.trim().isEmpty()) {
+            datos = extraerDatosConIA(textoCrudo, base64Image, contentType);
+        }
 
-        // 2. Extraer Referencia/Operación
-        datos.referencia = extraerReferencia(textoCrudo);
+        if (datos == null) {
+            datos = new DatosVoucher();
+        }
 
-        // 3. Extraer Fecha/Hora
-        datos.fechaPago = extraerFechaHora(textoCrudo);
-
-        // 4. Detectar Método de Pago
-        datos.metodoPago = detectarMetodoPago(textoCrudo);
-
-        // Fallback a OpenAI si no se detectó monto o es menor/igual a 0.0
+        // 2. FALLBACK / COMPLEMENTO con heurísticas Regex si algún campo no fue detectado por la IA
         if (datos.monto == null || datos.monto <= 0.0) {
-            log.info("[ConciliacionVoucherService] Monto no detectado o inválido (S/. 0.00). Aplicando fallback de OpenAI multimodal...");
-            DatosVoucher datosIA = extraerDatosConIA(textoCrudo, base64Image, contentType);
-            if (datosIA != null) {
-                if (datosIA.monto != null && datosIA.monto > 0.0) {
-                    datos.monto = datosIA.monto;
-                }
-                if (datosIA.referencia != null) {
-                    datos.referencia = datosIA.referencia;
-                }
-                if (datosIA.fechaPago != null) {
-                    datos.fechaPago = datosIA.fechaPago;
-                }
-                if (datosIA.metodoPago != null) {
-                    datos.metodoPago = datosIA.metodoPago;
-                }
+            Double montoRegex = extraerMonto(textoCrudo);
+            if (montoRegex != null && montoRegex > 0.0) {
+                datos.monto = montoRegex;
+                log.info("[ConciliacionVoucherService] Monto completado vía Regex: S/ {}", datos.monto);
             }
         }
 
-        log.info("[ConciliacionVoucherService] Análisis de OCR completado. Resultados: {}", datos);
+        if (datos.referencia == null || datos.referencia.trim().isEmpty()) {
+            String refRegex = extraerReferencia(textoCrudo);
+            if (refRegex != null && !refRegex.trim().isEmpty()) {
+                datos.referencia = refRegex;
+                log.info("[ConciliacionVoucherService] Referencia completada vía Regex: {}", datos.referencia);
+            }
+        }
+
+        if (datos.fechaPago == null) {
+            datos.fechaPago = extraerFechaHora(textoCrudo);
+            if (datos.fechaPago != null) {
+                log.info("[ConciliacionVoucherService] Fecha completada vía Regex: {}", datos.fechaPago);
+            }
+        }
+
+        if (datos.metodoPago == null || datos.metodoPago.trim().isEmpty()) {
+            datos.metodoPago = detectarMetodoPago(textoCrudo);
+        }
+
+        log.info("[ConciliacionVoucherService] Análisis de comprobante consolidado: {}", datos);
         return datos;
     }
 
     private Double extraerMonto(String texto) {
+        if (texto == null || texto.trim().isEmpty()) return null;
         log.info("[OCR Regex] Buscando monto en el texto del voucher...");
-        
-        // Patrón ultra flexible (soporta errores comunes de OCR sobre 'S/'):
+
+        // Patrón 1: Captura S/, S/., $, monto, total, pagado seguido de número con o sin decimales
         Pattern p1 = Pattern.compile("(?i)(?:[s5$§]/\\.?|monto|pagado|total|importe)[:\\s]*([\\d\\s\\.,]+)");
         Matcher m1 = p1.matcher(texto);
-        
+
         while (m1.find()) {
             String textoMonto = m1.group(1);
             if (textoMonto == null) continue;
-            
-            // Asegurar limpieza absoluta de caracteres antes del parseo
+
             String textoLimpio = textoMonto.replaceAll("[^0-9.,]", "");
             if (textoLimpio.contains(",") && textoLimpio.contains(".")) {
                 textoLimpio = textoLimpio.replace(",", ""); // Quitar miles
             } else if (textoLimpio.contains(",") && !textoLimpio.contains(".")) {
                 textoLimpio = textoLimpio.replace(",", "."); // Cambiar coma decimal por punto
             }
-            
+
             try {
                 Double montoFinal = Double.parseDouble(textoLimpio.trim());
-                log.info("[OCR Regex] Monto detectado con éxito: {} (de la cadena limpia: {})", montoFinal, textoLimpio);
-                return montoFinal;
+                if (montoFinal > 0.0) {
+                    log.info("[OCR Regex] Monto detectado con éxito: {} (de: {})", montoFinal, textoLimpio);
+                    return montoFinal;
+                }
             } catch (Exception ex) {
-                System.err.println("[FALLO CRÍTICO OCR] No se pudo parsear el texto limpido '" + textoLimpio + "' a Double. Forzando log de depuración.");
-                ex.printStackTrace();
+                log.warn("[OCR Regex] Error parseando monto: {}", textoLimpio);
             }
         }
-        
-        // Fallback: Cualquier número decimal razonable
-        Pattern pFallback = Pattern.compile("(\\d+\\s*\\.\\s*\\d{2})");
+
+        // Patrón 2 de rescate: Cualquier número entero o con 1-2 decimales opcionales (ej. 90 o 90.00)
+        Pattern pFallback = Pattern.compile("(?<!\\d)(\\d{1,6}(?:[.,]\\d{1,2})?)(?!\\d)");
         Matcher mFallback = pFallback.matcher(texto);
-        if (mFallback.find()) {
+        while (mFallback.find()) {
             String val = mFallback.group(1);
-            String textoLimpio = val.replaceAll("[^0-9.,]", "");
-            if (textoLimpio.contains(",") && textoLimpio.contains(".")) {
-                textoLimpio = textoLimpio.replace(",", "");
-            } else if (textoLimpio.contains(",") && !textoLimpio.contains(".")) {
-                textoLimpio = textoLimpio.replace(",", ".");
-            }
+            String textoLimpio = val.replace(",", ".");
             try {
                 Double montoFinal = Double.parseDouble(textoLimpio.trim());
-                log.info("[OCR Regex] Monto detectado vía Fallback: {}", montoFinal);
-                return montoFinal;
-            } catch (Exception ex) {
-                System.err.println("[FALLO CRÍTICO OCR Fallback] No se pudo parsear '" + textoLimpio + "' a Double.");
-            }
+                if (montoFinal >= 5.0 && montoFinal <= 50000.0) {
+                    log.info("[OCR Regex] Monto detectado vía Fallback tolerante: {}", montoFinal);
+                    return montoFinal;
+                }
+            } catch (Exception ignored) {}
         }
-        
+
         return null;
     }
 
@@ -621,14 +621,15 @@ public class ConciliacionVoucherService {
     private DatosVoucher extraerDatosConIA(String textoCrudo, String base64Image, String contentType) {
         log.info("[ConciliacionVoucherService] Llamando a OpenAI multimodal para extraer datos visualmente del comprobante...");
         try {
-            if (apiKey == null || apiKey.trim().isEmpty() || (apiKey.startsWith("sk-proj-xpb4m") && apiKey.length() < 30)) {
+            String cleanApiKey = (apiKey != null) ? apiKey.trim().replaceAll("[}\\s]+$", "") : "";
+            if (cleanApiKey.isEmpty() || (cleanApiKey.startsWith("sk-proj-xpb4m") && cleanApiKey.length() < 30)) {
                 log.warn("[ConciliacionVoucherService] OpenAI API Key no configurada o incompleta. Saltando fallback de IA.");
                 return null;
             }
 
             org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
             headers.setContentType(org.springframework.http.MediaType.APPLICATION_JSON);
-            headers.setBearerAuth(apiKey);
+            headers.setBearerAuth(cleanApiKey);
 
             com.fasterxml.jackson.databind.node.ObjectNode requestNode = objectMapper.createObjectNode();
             requestNode.put("model", "gpt-4o-mini");
@@ -637,16 +638,21 @@ public class ConciliacionVoucherService {
 
             com.fasterxml.jackson.databind.node.ObjectNode systemMessage = objectMapper.createObjectNode();
             systemMessage.put("role", "system");
-            systemMessage.put("content", "Eres un asistente experto en contabilidad y pasarelas de pago (Yape, Plin, BCP). " +
-                    "Tu tarea es analizar la imagen del comprobante de pago provista y devolver la información clave en formato JSON. " +
-                    "Debes devolver un JSON con la siguiente estructura:\n" +
+            systemMessage.put("content", "Eres un asistente auditor contable de alta precisión experto en comprobantes de pago peruanos (Yape, Plin, BCP, BBVA, Interbank, Scotiabank, Banco de la Nación).\n" +
+                    "Tu tarea es analizar visualmente la imagen del comprobante de pago provista y devolver la información clave en formato JSON estrictamente válido.\n\n" +
+                    "REGLAS OBLIGATORIAS:\n" +
+                    "1. 'monto': número decimal (Double). Ejemplos: si dice 'S/ 90', devuelve 90.00. Si dice 'S/ 90.00', devuelve 90.00. Si dice 'S/ 90.50', devuelve 90.50. Nunca devuelvas 0 ni null si el monto es legible en la imagen.\n" +
+                    "2. 'referencia': el número de operación (ej. '29969745'), código de seguridad o número de transacción. Si aparece 'Nro. de operación' o 'Código de seguridad', extráelo limpiamente sin letras.\n" +
+                    "3. 'fechaPago': fecha y hora del pago en formato ISO-8601 (ej. '2026-06-26T21:11:00'). Si dice '26 jun. 2026 | 09:11 p. m.', conviértelo correctamente al formato 24 horas.\n" +
+                    "4. 'metodoPago': 'YAPE', 'PLIN', 'BCP', 'BBVA', 'INTERBANK', etc.\n\n" +
+                    "Debes devolver un JSON con la siguiente estructura exacta:\n" +
                     "{\n" +
-                    "  \"monto\": 150.00,\n" +
-                    "  \"referencia\": \"12345678\",\n" +
-                    "  \"fechaPago\": \"2026-06-29T13:32:00\",\n" +
+                    "  \"monto\": 90.00,\n" +
+                    "  \"referencia\": \"29969745\",\n" +
+                    "  \"fechaPago\": \"2026-06-26T21:11:00\",\n" +
                     "  \"metodoPago\": \"YAPE\"\n" +
                     "}\n" +
-                    "Si no encuentras algún campo, devuélvelo como null o un string vacío. Analiza visualmente la imagen para encontrar el monto exacto, la referencia y la fecha/hora.");
+                    "Devuelve ÚNICAMENTE el objeto JSON sin texto antes ni después.");
             messages.add(systemMessage);
 
             // Mensaje del usuario multimodal (texto + imagen)
@@ -654,7 +660,7 @@ public class ConciliacionVoucherService {
             
             com.fasterxml.jackson.databind.node.ObjectNode textNode = objectMapper.createObjectNode();
             textNode.put("type", "text");
-            textNode.put("text", "Analiza la imagen adjunta para extraer la información. Texto obtenido por OCR como referencia:\n\n" + textoCrudo);
+            textNode.put("text", "Analiza visualmente la imagen adjunta para extraer el comprobante de pago. Si se detectó texto parcial previo, úsalo de apoyo:\n" + (textoCrudo != null ? textoCrudo : ""));
             contentArray.add(textNode);
 
             com.fasterxml.jackson.databind.node.ObjectNode imageNode = objectMapper.createObjectNode();

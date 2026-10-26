@@ -46,12 +46,9 @@ public class OcrServiceImpl implements OcrService {
             log.info("[OCR Service] OCR completado con éxito.");
             return textoExtraido;
 
-        } catch (IOException e) {
-            log.error("[OCR Service] Error de E/S leyendo la imagen: {}", e.getMessage(), e);
-            throw new RuntimeException("Error de lectura de imagen para OCR", e);
-        } catch (TesseractException e) {
-            log.error("[OCR Service] Error de Tesseract al procesar la imagen: {}", e.getMessage(), e);
-            throw new RuntimeException("Error de Tesseract OCR", e);
+        } catch (Throwable t) {
+            log.warn("[OCR Service] Tesseract no disponible o falló en el entorno nativo ({}). Se retornará vacío para delegar a OpenAI Vision.", t.getMessage());
+            return "";
         }
     }
 

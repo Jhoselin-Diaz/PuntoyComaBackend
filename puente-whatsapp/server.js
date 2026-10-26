@@ -236,6 +236,40 @@ function limpiarCarpetaSesion() {
     }
 }
 
+// Purga selectiva de archivos session-* para forzar renovación de llaves Signal (pkmsg)
+function purgarSesionParticipante(target) {
+    if (!target) return 0;
+    const cleanTarget = String(target).split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+    if (!cleanTarget || cleanTarget.length < 5) return 0;
+
+    let deletedCount = 0;
+    const dirsToCheck = [AUTH_DIR, LOCAL_AUTH_DIR, AZURE_AUTH_DIR];
+    const uniqueDirs = [...new Set(dirsToCheck.filter(d => fs.existsSync(d)))];
+
+    for (const dir of uniqueDirs) {
+        try {
+            const files = fs.readdirSync(dir);
+            for (const file of files) {
+                // Purga sesiones directas o de dispositivos (:0, :1, etc) vinculados a este identificador
+                if ((file.startsWith('session-') || file.startsWith('pre-key-')) && file.includes(cleanTarget)) {
+                    const fullPath = path.join(dir, file);
+                    try {
+                        fs.unlinkSync(fullPath);
+                        deletedCount++;
+                        console.log(`🧹 [Signal Self-Healing] Archivo de sesión purgado: ${fullPath}`);
+                    } catch (e) {
+                        console.warn(`⚠️ Error eliminando ${fullPath}:`, e.message);
+                    }
+                }
+            }
+        } catch (err) {
+            console.warn(`⚠️ Error leyendo directorio ${dir} para purga:`, err.message);
+        }
+    }
+
+    return deletedCount;
+}
+
 // ── Inicialización del Socket de Baileys ─────────────────────────────────────
 async function inicializarCliente() {
     isReconnecting = false;
@@ -258,6 +292,12 @@ async function inicializarCliente() {
         // Cargar mapa persistente de LIDs
         cargarLidMap();
 
+        // Purgar proactivamente sesiones corruptas reportadas de André y su LID
+        const purgadosInicial = purgarSesionParticipante('51933526011') + purgarSesionParticipante('270656038019288');
+        if (purgadosInicial > 0) {
+            console.log(`🧹 [Signal Self-Healing] Purgadas ${purgadosInicial} sesiones corruptas al arrancar.`);
+        }
+
         const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
         const { version } = await fetchLatestBaileysVersion().catch(() => ({
             version: [2, 3000, 1015901307]
@@ -275,7 +315,18 @@ async function inicializarCliente() {
             msgRetryCounterCache,
             defaultQueryTimeoutMs: 60000, // Evita timeout en init queries
             getMessage: async (key) => {
-                // Almacén de mensajes para resolver reintentos de descifrado Signal (CIPHERTEXT retry)
+                const participant = key?.participant || key?.remoteJid;
+                console.log(`🔄 [Signal Retry Event] Baileys solicitando mensaje para reintento. ID: ${key?.id} | Participante: ${participant}`);
+
+                if (participant) {
+                    // Purgar selectivamente la sesión Signal local del dispositivo para obligar
+                    // a que Baileys inyecte pre-claves frescas (PreKey pkmsg) en el reintento
+                    const purgados = purgarSesionParticipante(participant);
+                    if (purgados > 0) {
+                        console.log(`✨ [Signal Self-Healing] Purgadas ${purgados} sesiones para ${participant} antes de retransmitir.`);
+                    }
+                }
+
                 if (key?.id && messageStore.has(key.id)) {
                     const rawMsg = messageStore.get(key.id);
                     return rawMsg?.message ? rawMsg.message : rawMsg;
@@ -310,6 +361,25 @@ async function inicializarCliente() {
             for (const c of contacts) {
                 if (c.id && c.lid) {
                     registrarAsociacionLid(c.lid, c.id);
+                }
+            }
+        });
+
+        // ── Monitoreo de Receipts para auto-recuperación ante fallos de descifrado Signal ──
+        sock.ev.on('message-receipt.update', async (receipts) => {
+            if (!receipts || !Array.isArray(receipts)) return;
+            for (const r of receipts) {
+                if (r.receipt && r.receipt.type === 'retry') {
+                    const participant = r.receipt.userJid || r.key?.participant || r.key?.remoteJid;
+                    console.log(`⚠️ [Receipt Retry Detectado] Dispositivo reportó fallo de descifrado: ${participant}`);
+                    if (participant) {
+                        purgarSesionParticipante(participant);
+                        if (sock && typeof sock.assertSessions === 'function') {
+                            await sock.assertSessions([participant], true).catch((e) => {
+                                console.warn(`⚠️ Error en assertSessions para ${participant}:`, e.message);
+                            });
+                        }
+                    }
                 }
             }
         });
@@ -667,6 +737,49 @@ app.get('/reset', async (req, res) => {
         status: 'RESETTING',
         message: 'Sesión eliminada con éxito. Generando nuevo código QR en breve...'
     });
+});
+
+// ── 3.1. Endpoint Administrativo para purgar y reiniciar sesiones Signal de un participante ──
+const resetParticipantHandler = async (req, res) => {
+    const rawTarget = req.body?.target || req.query?.target || req.body?.phone || req.query?.phone || req.body?.jid || req.query?.jid;
+    if (!rawTarget) {
+        return res.status(400).json({ error: 'Parámetro target, phone o jid es requerido' });
+    }
+
+    const cleanDigits = String(rawTarget).replace(/[^0-9]/g, '');
+    const purgados = purgarSesionParticipante(cleanDigits);
+
+    let sessionRefreshed = false;
+    if (sock && typeof sock.assertSessions === 'function') {
+        const jids = [
+            jidNormalizedUser(`${cleanDigits}@s.whatsapp.net`),
+            `${cleanDigits}@lid`
+        ];
+        try {
+            await sock.assertSessions(jids, true);
+            sessionRefreshed = true;
+        } catch (errSession) {
+            console.warn(`⚠️ [assertSessions] Error refrescando sesión de ${cleanDigits}:`, errSession.message);
+        }
+    }
+
+    console.log(`✅ [Admin Reset Participant] Sesión Signal purgada para "${rawTarget}": ${purgados} archivos eliminados | assertSessions: ${sessionRefreshed}`);
+
+    return res.status(200).json({
+        success: true,
+        target: rawTarget,
+        cleanDigits,
+        archivosPurgados: purgados,
+        sessionRefreshed,
+        mensaje: `Sesión Signal de ${rawTarget} purgada exitosamente. El próximo mensaje negociará una sesión Pre-Key limpia (pkmsg).`
+    });
+};
+
+app.post('/session/reset-participant', resetParticipantHandler);
+app.get('/session/reset-participant', resetParticipantHandler);
+app.get('/session/reset-participant/:target', (req, res) => {
+    req.query.target = req.params.target;
+    return resetParticipantHandler(req, res);
 });
 
 // ── 4. Endpoint de Salida /message/sendText/:instance y /message/sendText ──

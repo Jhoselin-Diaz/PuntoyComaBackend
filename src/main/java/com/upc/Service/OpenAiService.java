@@ -1979,13 +1979,23 @@ public class OpenAiService {
                 JsonNode responseJson = objectMapper.readTree(responseStr);
                 String result = responseJson.path("choices").get(0).path("message").path("content").asText().trim();
                 
-                // Actualizar la sugerencia en el Chat asociado al usuario de este pedido
-                if (pedido.getUsuario() != null && pedido.getUsuario().getTelefono() != null) {
-                    chatRepository.findByTelefonoCliente(pedido.getUsuario().getTelefono()).ifPresent(chat -> {
+                // Actualizar la sugerencia en el Chat asociado al usuario o telefonoContacto de este pedido
+                String telDestino = (pedido.getUsuario() != null && pedido.getUsuario().getTelefono() != null)
+                        ? pedido.getUsuario().getTelefono()
+                        : pedido.getTelefonoContacto();
+                if (telDestino != null && !telDestino.trim().isEmpty()) {
+                    final String telLimpio = telDestino.replaceAll("[^0-9]", "");
+                    final String tel51 = telLimpio.startsWith("51") ? telLimpio : (telLimpio.length() == 9 ? "51" + telLimpio : telLimpio);
+                    java.util.Optional<com.upc.Entity.Chat> chatOpt = chatRepository.findByTelefonoCliente(tel51);
+                    if (chatOpt.isEmpty()) {
+                        chatOpt = chatRepository.findByTelefonoCliente(telLimpio);
+                    }
+                    chatOpt.ifPresent(chat -> {
                         chat.setContextoInmediato("SOLICITAR_FALTANTE");
                         chat.setSugerenciaIa(result);
                         chat.setFasePedido("CONCILIACION");
                         chatRepository.save(chat);
+                        log.info("[OpenAiService] Sugerencia monto faltante guardada en chat ID {} para cliente {}", chat.getId(), tel51);
                     });
                 }
                 

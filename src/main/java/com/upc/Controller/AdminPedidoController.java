@@ -333,12 +333,18 @@ public class AdminPedidoController {
             System.out.println("[ADMIN PEDIDO] Pedido ID " + guardado.getId() + " (" + guardado.getNumeroOrden() + ") VALIDADO en BD.");
 
             // Actualizar reactivamente el chat y sugerencia IA del cliente
-            if (guardado.getUsuario() != null && guardado.getUsuario().getTelefono() != null) {
-                String telefonoCliente = guardado.getUsuario().getTelefono();
-                chatRepository.findByTelefonoCliente(telefonoCliente).ifPresent(chat -> {
+            String telefonoClienteVal = (guardado.getUsuario() != null && guardado.getUsuario().getTelefono() != null)
+                    ? guardado.getUsuario().getTelefono()
+                    : guardado.getTelefonoContacto();
+            if (telefonoClienteVal != null && !telefonoClienteVal.trim().isEmpty()) {
+                String cleanTel = telefonoClienteVal.replaceAll("[^0-9]", "");
+                String tel51 = cleanTel.startsWith("51") ? cleanTel : (cleanTel.length() == 9 ? "51" + cleanTel : cleanTel);
+                java.util.Optional<com.upc.Entity.Chat> chatOpt = chatRepository.findByTelefonoCliente(tel51);
+                if (chatOpt.isEmpty()) {
+                    chatOpt = chatRepository.findByTelefonoCliente(cleanTel);
+                }
+                chatOpt.ifPresent(chat -> {
                     chat.setContextoInmediato(null);
-                    // CORRECCIÓN: limpiar pedidoReferenciadoId para que el chat no arrastre
-                    // la referencia a este pedido ya VALIDADO en futuros ciclos de compra.
                     chat.setPedidoReferenciadoId(null);
                     String nuevaSugerencia = "¡Tu pago ha sido validado con éxito! 🎉 Estamos preparando tu pedido para despacho. Te enviaremos el número de seguimiento en cuanto esté en camino. ¡Muchas gracias por tu compra! ❤️";
                     chat.setFasePedido("INICIAL");
@@ -347,7 +353,7 @@ public class AdminPedidoController {
                     chat.setDatosCompletos(false);
                     chat.setSugerenciaIa(nuevaSugerencia);
                     chatRepository.save(chat);
-                    System.out.println("[AUDITORÍA REACCIÓN] Chat de " + telefonoCliente + " actualizado reactivamente tras validación manual. pedidoReferenciadoId limpiado.");
+                    System.out.println("[AUDITORÍA REACCIÓN] Chat de " + tel51 + " actualizado reactivamente tras validación manual. pedidoReferenciadoId limpiado.");
                 });
             }
 
@@ -446,7 +452,13 @@ public class AdminPedidoController {
                     ? guardado.getUsuario().getTelefono()
                     : guardado.getTelefonoContacto();
             if (telefonoCliente != null && !telefonoCliente.trim().isEmpty()) {
-                chatRepository.findByTelefonoCliente(telefonoCliente).ifPresent(chat -> {
+                String cleanTel = telefonoCliente.replaceAll("[^0-9]", "");
+                String tel51 = cleanTel.startsWith("51") ? cleanTel : (cleanTel.length() == 9 ? "51" + cleanTel : cleanTel);
+                java.util.Optional<com.upc.Entity.Chat> chatOpt = chatRepository.findByTelefonoCliente(tel51);
+                if (chatOpt.isEmpty()) {
+                    chatOpt = chatRepository.findByTelefonoCliente(cleanTel);
+                }
+                chatOpt.ifPresent(chat -> {
                     chat.setContextoInmediato(null);
                     String nuevaSugerencia = "Hola " + chat.getNombreCliente() + ", ";
                     if ("VALIDADO".equalsIgnoreCase(guardado.getEstado())) {
