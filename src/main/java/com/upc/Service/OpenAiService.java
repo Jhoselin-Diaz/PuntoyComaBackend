@@ -118,6 +118,9 @@ public class OpenAiService {
     @jakarta.annotation.PostConstruct
     public void init() {
         this.transactionTemplate = new org.springframework.transaction.support.TransactionTemplate(transactionManager);
+        if (this.apiKey != null) {
+            this.apiKey = this.apiKey.trim().replaceAll("[}\\s]+$", "").replaceAll("^[{\\s]+", "");
+        }
     }
 
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -342,6 +345,10 @@ public class OpenAiService {
 
     public void procesarMensajeConIASincrono(Long chatId, String telefono, String mensajeEntrante, boolean soloSugerencia) {
         log.info("[OpenAI Service] Iniciando procesamiento SÍNCRONO para el chat ID: {}, Teléfono: {}, soloSugerencia: {}", chatId, telefono, soloSugerencia);
+
+        if (this.apiKey != null) {
+            this.apiKey = this.apiKey.trim().replaceAll("[}\\s]+$", "").replaceAll("^[{\\s]+", "");
+        }
 
         if (apiKey == null || apiKey.trim().isEmpty() || (apiKey.startsWith("sk-proj-xpb4m") && apiKey.length() < 30)) {
             log.warn("[OpenAI Service] OpenAI API Key no configurada o incompleta. Se omite llamada.");
@@ -984,6 +991,9 @@ public class OpenAiService {
                                 }
                             }
                         }
+                        if (pedidoPendienteActivo == null && pedidoVinculado != null) {
+                            pedidoPendienteActivo = pedidoVinculado;
+                        }
 
                         boolean ultimoMensajeEsVoucher = false;
                         boolean clienteEnvioVoucherReciente = false;
@@ -1184,7 +1194,33 @@ public class OpenAiService {
                                 chat.setContextoInmediato(null);
                                 respuestaSugerida = "¡Hola! Contamos con disponibilidad para " + textoProductosCarrito + " 😊. Para continuar, por favor, proporciona los siguientes datos de entrega:\n" +
                                         PLANTILLA_DATOS_ENTREGA;
-                            } else if (tienePendienteActivo && direccionCompletaDefinitiva) {
+                            } else if (tienePendienteActivo && (direccionCompletaDefinitiva || algunaDireccionDetectada || tiene5Campos || direccionValida)) {
+                                if (direccionCompletaDefinitiva || direccionValida || tiene5Campos) {
+                                    String dirUnificadaSync = "Dpto: " + depto + ", Prov: " + prov + ", Dist: " + dist + ", Dir: " + dirEx + ", Ref: " + ref;
+                                    boolean huboCambioPedido = false;
+                                    if (pedidoPendienteActivo.getDireccionEntrega() == null || pedidoPendienteActivo.getDireccionEntrega().trim().isEmpty() || pedidoPendienteActivo.getDireccionEntrega().contains("null")) {
+                                        pedidoPendienteActivo.setDireccionEntrega(dirUnificadaSync);
+                                        pedidoPendienteActivo.setDireccionEnvio(dirUnificadaSync);
+                                        huboCambioPedido = true;
+                                    }
+                                    if ((pedidoPendienteActivo.getDni() == null || pedidoPendienteActivo.getDni().trim().isEmpty()) && !dniVal.isEmpty()) {
+                                        pedidoPendienteActivo.setDni(dniVal);
+                                        huboCambioPedido = true;
+                                    }
+                                    if ((pedidoPendienteActivo.getTelefonoContacto() == null || pedidoPendienteActivo.getTelefonoContacto().trim().isEmpty()) && !telVal.isEmpty()) {
+                                        pedidoPendienteActivo.setTelefonoContacto(telVal);
+                                        huboCambioPedido = true;
+                                    }
+                                    if ((pedidoPendienteActivo.getNombreCompleto() == null || pedidoPendienteActivo.getNombreCompleto().trim().isEmpty() || "Cliente".equalsIgnoreCase(pedidoPendienteActivo.getNombreCompleto())) && nomComp != null && !nomComp.isEmpty()) {
+                                        pedidoPendienteActivo.setNombreCompleto(nomComp);
+                                        huboCambioPedido = true;
+                                    }
+                                    if (huboCambioPedido) {
+                                        pedidoPendienteActivo = pedidoRepository.save(pedidoPendienteActivo);
+                                        log.info("[OpenAI Service] Sincronizados datos de entrega en Pedido ID {} durante regenerarRespuestaIA.", pedidoPendienteActivo.getId());
+                                    }
+                                }
+
                                 double totalRealBD = pedidoPendienteActivo.getTotal() != null ? pedidoPendienteActivo.getTotal() : 0.0;
                                 String totalRealStr = String.format("%.2f", totalRealBD);
                                 String vars = pedidoPendienteActivo.getVariantesEspecificas() != null ? pedidoPendienteActivo.getVariantesEspecificas() : "Productos de tu pedido";
@@ -1195,6 +1231,9 @@ public class OpenAiService {
 
                                 fasePedido = "CONCILIACION";
                                 chat.setDatosCompletos(true);
+                                chat.setDireccionDetectada(true);
+                                chat.setPedidoIdentificado(true);
+                                chat.setPedidoReferenciadoId(pedidoPendienteActivo.getId());
                                 chat.setContextoInmediato(null);
                                 if (saldo <= 0.01 && totalRealBD > 0.0) {
                                     respuestaSugerida = "¡Gracias por tu pago! 🛍️ Hemos recibido y registrado el monto total de S/." + totalRealStr + " (" + vars + ") correspondiente a tu pedido. El pago está completo y será revisado por nuestro equipo para continuar con la preparación y despacho. ¡Muchas gracias por tu compra! ❤️";
@@ -1699,7 +1738,107 @@ public class OpenAiService {
                     } else {
                         // Fallback determinista si OpenAI falló o retornó null
                         log.warn("[OpenAI Service] OpenAI retornó null o falló. Ejecutando fallback determinista en base de datos...");
-                        if (ctx.esSolicitudDeProductos) {
+                        
+                        Pedido pedDestino = pedidoPendienteActivo;
+                        if (pedDestino == null && chat.getPedidoReferenciadoId() != null) {
+                            pedDestino = pedidoRepository.findById(chat.getPedidoReferenciadoId()).orElse(null);
+                        }
+                        if (pedDestino == null) {
+                            pedDestino = pedidoRepository.findFirstByUsuarioTelefonoAndEstado(telefono, "PENDIENTE");
+                        }
+
+                        boolean fbEsVoucher = mensajeEntrante != null && (mensajeEntrante.contains("[VOUCHER]") || mensajeEntrante.contains("data:image/") || mensajeEntrante.contains("[DOCUMENTO]"));
+                        boolean fbTieneVouchers = false;
+                        if (pedDestino != null) {
+                            Double sumV = pagoVoucherRepository.obtenerMontoTotalPagadoPorPedido(pedDestino.getId());
+                            if ((sumV != null && sumV > 0.0) || (pedDestino.getVoucherUrl() != null && !pedDestino.getVoucherUrl().trim().isEmpty()) || (pedDestino.getMontoOcr() != null && pedDestino.getMontoOcr() > 0.0) || "PAGO_COMPLETO".equalsIgnoreCase(pedDestino.getEstadoPago())) {
+                                fbTieneVouchers = true;
+                            }
+                        }
+                        boolean fbContextoVoucher = fbEsVoucher || fbTieneVouchers;
+
+                        DatosConciliacionExtraidos datosFallback = extraerDatosConciliacionConFallback(null, mensajeEntrante, ctx.historial);
+                        boolean fbCalle = !datosFallback.direccionExacta.isEmpty();
+                        boolean fbGeo = !datosFallback.distrito.isEmpty() || !datosFallback.provincia.isEmpty() || !datosFallback.departamento.isEmpty();
+                        boolean fbDirValida = fbCalle && (fbGeo || datosFallback.direccionExacta.length() >= 15);
+                        boolean fb8Campos = !datosFallback.nombreCompleto.isEmpty() && !datosFallback.dni.isEmpty() && (!datosFallback.telefono.isEmpty() || !telefono.isEmpty()) && fbDirValida;
+                        boolean fb5Campos = fb8Campos || fbDirValida || (!datosFallback.departamento.isEmpty() && !datosFallback.provincia.isEmpty() && !datosFallback.distrito.isEmpty() && !datosFallback.direccionExacta.isEmpty());
+
+                        String mNormFB = mensajeEntrante != null ? java.text.Normalizer.normalize(mensajeEntrante.toLowerCase(), java.text.Normalizer.Form.NFD).replaceAll("\\p{InCombiningDiacriticalMarks}+", "") : "";
+                        boolean fbTienePalabrasDireccion = mNormFB.contains("direccion") || mNormFB.contains("dir:") || mNormFB.contains("calle") || mNormFB.contains("av") || mNormFB.contains("jr") || mNormFB.contains("distrito") || mNormFB.contains("dpto") || mNormFB.contains("departamento") || mNormFB.contains("provincia") || mNormFB.contains("pasaje") || mNormFB.contains("mz") || mNormFB.contains("lote");
+
+                        if (fbContextoVoucher) {
+                            chat.setFasePedido("CONCILIACION");
+                            chat.setDatosCompletos(true);
+                            chat.setDireccionDetectada(true);
+                            chat.setPedidoIdentificado(true);
+                            chat.setContextoInmediato(null);
+                            if (pedDestino != null) chat.setPedidoReferenciadoId(pedDestino.getId());
+                            if (pedDestino != null && "VALIDADO".equalsIgnoreCase(pedDestino.getEstado())) {
+                                chat.setSugerenciaIa("¡Tu pago ha sido validado con éxito! 🎉 Estamos preparando tu pedido para despacho. Te enviaremos el número de seguimiento en cuanto esté en camino. ¡Muchas gracias por tu compra! ❤️");
+                            } else {
+                                chat.setSugerenciaIa("¡Muchas gracias por enviarnos tu comprobante! 🎉 Ya lo tenemos registrado y estamos finalizando la validación de tu pedido para proceder con la entrega.");
+                            }
+                            chatRepository.save(chat);
+                            log.info("[OpenAI Service] Fallback determinista exitoso: Comprobante/Voucher procesado para chat ID {}.", chatId);
+
+                        } else if (fb5Campos || fbDirValida || (fbTienePalabrasDireccion && fbCalle)) {
+                            String dirUnificadaFB = "Dpto: " + datosFallback.departamento + ", Prov: " + datosFallback.provincia + ", Dist: " + datosFallback.distrito + ", Dir: " + datosFallback.direccionExacta + ", Ref: " + datosFallback.referencia;
+                            if (pedDestino != null) {
+                                pedDestino.setDireccionEntrega(dirUnificadaFB);
+                                pedDestino.setDireccionEnvio(dirUnificadaFB);
+                                if (!datosFallback.dni.isEmpty()) pedDestino.setDni(datosFallback.dni);
+                                if (!datosFallback.telefono.isEmpty()) pedDestino.setTelefonoContacto(datosFallback.telefono);
+                                if (!datosFallback.nombreCompleto.isEmpty() && !"Cliente".equalsIgnoreCase(datosFallback.nombreCompleto)) {
+                                    pedDestino.setNombreCompleto(datosFallback.nombreCompleto);
+                                    chat.setNombreCliente(datosFallback.nombreCompleto);
+                                }
+                                pedDestino = pedidoRepository.save(pedDestino);
+                                chat.setPedidoReferenciadoId(pedDestino.getId());
+                            }
+
+                            chat.setPedidoIdentificado(true);
+                            chat.setDireccionDetectada(true);
+                            chat.setDatosCompletos(true);
+                            chat.setFasePedido("CONCILIACION");
+                            chat.setContextoInmediato(null);
+
+                            double totFB = pedDestino != null && pedDestino.getTotal() != null ? pedDestino.getTotal() : 0.0;
+                            String totFBStr = String.format("%.2f", totFB);
+                            String varsFB = pedDestino != null && pedDestino.getVariantesEspecificas() != null ? pedDestino.getVariantesEspecificas() : "tu pedido";
+                            String nombreFB = (!datosFallback.nombreCompleto.isEmpty() && !"Cliente".equalsIgnoreCase(datosFallback.nombreCompleto)) ? datosFallback.nombreCompleto : (chat.getNombreCliente() != null ? chat.getNombreCliente() : "Cliente");
+
+                            String sugFB = "¡Hola " + nombreFB + "! 😊 Tu pedido por un total de S/." + totFBStr + " (" + varsFB + ") se encuentra registrado.\n\n" +
+                                    "📍 Tus datos de envío ya se encuentran registrados en el sistema.\n\n" +
+                                    "💳 Para proceder con el despacho, puedes realizar el pago de S/." + totFBStr + " mediante Yape, Plin o Transferencia al número corporativo " + ctx.formattedCorpNum + ".\n\n" +
+                                    "📲 Por favor, envíanos la captura o voucher de pago por este chat para verificarlo. ¡Muchas gracias! 😊";
+
+                            chat.setSugerenciaIa(sugFB);
+                            chatRepository.save(chat);
+                            log.info("[OpenAI Service] Fallback determinista exitoso: Dirección completa registrada para chat ID {}. Fase CONCILIACION.", chatId);
+
+                        } else if (fbTienePalabrasDireccion || !datosFallback.dni.isEmpty() || (!datosFallback.nombreCompleto.isEmpty() && !"Cliente".equalsIgnoreCase(datosFallback.nombreCompleto))) {
+                            List<String> faltantesFB = new ArrayList<>();
+                            if (datosFallback.nombreCompleto.isEmpty() || "Cliente".equalsIgnoreCase(datosFallback.nombreCompleto)) faltantesFB.add("nombre completo");
+                            if (datosFallback.dni.isEmpty()) faltantesFB.add("DNI");
+                            if (!fbCalle) faltantesFB.add("dirección exacta (calle o avenida)");
+                            if (!fbGeo) faltantesFB.add("distrito o provincia");
+
+                            chat.setPedidoIdentificado(true);
+                            chat.setDireccionDetectada(true);
+                            chat.setDatosCompletos(false);
+                            chat.setFasePedido("INICIAL");
+                            chat.setContextoInmediato("SOLICITAR_DATOS_FALTANTES");
+
+                            String camposStrFB = String.join(", ", faltantesFB);
+                            String nombreSaludoFB = (!datosFallback.nombreCompleto.isEmpty() && !"Cliente".equalsIgnoreCase(datosFallback.nombreCompleto)) ? datosFallback.nombreCompleto : chat.getNombreCliente();
+                            String sugParcialFB = "¡Muchas gracias" + (nombreSaludoFB != null && !nombreSaludoFB.isEmpty() ? " " + nombreSaludoFB : "") + "! 😊 Ya tenemos registrados tus datos recibidos. Solo compártenos tu *" + camposStrFB + "* para poder finalizar tu pedido y proceder con el pago.";
+
+                            chat.setSugerenciaIa(sugParcialFB);
+                            chatRepository.save(chat);
+                            log.info("[OpenAI Service] Fallback determinista exitoso: Datos parciales para chat ID {}. Solicitando faltantes.", chatId);
+
+                        } else if (ctx.esSolicitudDeProductos) {
                             Pedido pedidoPendiente = pedidoRepository.findFirstByUsuarioTelefonoAndEstado(telefono, "PENDIENTE");
                             if (pedidoPendiente == null) {
                                 Map<Producto, Integer> prodsExtraidos = parsearProductosDeterminista(mensajeEntrante);
