@@ -8,4 +8,5 @@ import java.util.Optional;
 @Repository
 public interface CuponRepository extends JpaRepository<Cupon, Long> {
     Optional<Cupon> findByCodigoIgnoreCaseAndActivoTrue(String codigo);
+    java.util.List<Cupon> findByTipoAplicacionIgnoreCaseAndActivoTrue(String tipoAplicacion);
 }

@@ -20,6 +20,18 @@ public class CuponServiceImpl implements CuponService {
 
     @Override
     public Cupon guardar(Cupon cupon) {
+        if (cupon.getTipoAplicacion() == null || cupon.getTipoAplicacion().trim().isEmpty()) {
+            cupon.setTipoAplicacion("GENERAL");
+        }
+        if (Boolean.TRUE.equals(cupon.getActivo()) && "BIENVENIDA".equalsIgnoreCase(cupon.getTipoAplicacion())) {
+            List<Cupon> activos = repository.findByTipoAplicacionIgnoreCaseAndActivoTrue("BIENVENIDA");
+            if (!activos.isEmpty()) {
+                throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.CONFLICT,
+                    "Ya existe un cupón de bienvenida activo. Debes desactivar o editar el cupón actual antes de crear uno nuevo."
+                );
+            }
+        }
         if (cupon.getUsosActuales() == null) {
             cupon.setUsosActuales(0);
         }
@@ -30,6 +42,18 @@ public class CuponServiceImpl implements CuponService {
     public Cupon actualizar(Long id, Cupon cuponDetails) {
         Cupon cupon = repository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Cupón no encontrado con id: " + id));
+
+        if (Boolean.TRUE.equals(cuponDetails.getActivo()) && "BIENVENIDA".equalsIgnoreCase(cuponDetails.getTipoAplicacion())) {
+            List<Cupon> activos = repository.findByTipoAplicacionIgnoreCaseAndActivoTrue("BIENVENIDA");
+            boolean otroActivo = activos.stream().anyMatch(c -> !c.getId().equals(id));
+            if (otroActivo) {
+                throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.CONFLICT,
+                    "Ya existe un cupón de bienvenida activo. Debes desactivar o editar el cupón actual antes de crear uno nuevo."
+                );
+            }
+        }
+
         cupon.setCodigo(cuponDetails.getCodigo());
         cupon.setPorcentajeDescuento(cuponDetails.getPorcentajeDescuento());
         cupon.setActivo(cuponDetails.getActivo());
@@ -37,6 +61,11 @@ public class CuponServiceImpl implements CuponService {
         cupon.setFechaInicio(cuponDetails.getFechaInicio());
         cupon.setFechaFin(cuponDetails.getFechaFin());
         cupon.setLimiteUso(cuponDetails.getLimiteUso());
+        if (cuponDetails.getTipoAplicacion() != null) {
+            cupon.setTipoAplicacion(cuponDetails.getTipoAplicacion());
+        }
+        cupon.setCategoriaAplicable(cuponDetails.getCategoriaAplicable());
+        cupon.setProductoIds(cuponDetails.getProductoIds());
         if (cuponDetails.getUsosActuales() != null) {
             cupon.setUsosActuales(cuponDetails.getUsosActuales());
         }

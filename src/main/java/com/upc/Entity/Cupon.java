@@ -39,4 +39,13 @@ public class Cupon {
 
     @Column(name = "usos_actuales")
     private Integer usosActuales = 0;
+
+    @Column(name = "tipo_aplicacion")
+    private String tipoAplicacion = "GENERAL";
+
+    @Column(name = "categoria_aplicable")
+    private String categoriaAplicable;
+
+    @Column(name = "producto_ids", length = 2048)
+    private String productoIds;
 }
