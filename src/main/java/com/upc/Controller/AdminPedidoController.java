@@ -135,9 +135,14 @@ public class AdminPedidoController {
             } else if (pedido.getTelefonoContacto() != null) {
                 telefonoCliente = pedido.getTelefonoContacto();
             }
-            if (telefonoCliente != null) {
-                String telFinal = telefonoCliente;
-                chatRepository.findByTelefonoCliente(telFinal).ifPresent(chat -> {
+            if (telefonoCliente != null && !telefonoCliente.trim().isEmpty()) {
+                String cleanTel = telefonoCliente.replaceAll("[^0-9]", "");
+                String tel51 = cleanTel.startsWith("51") ? cleanTel : (cleanTel.length() == 9 ? "51" + cleanTel : cleanTel);
+                java.util.Optional<com.upc.Entity.Chat> chatOpt = chatRepository.findByTelefonoCliente(tel51);
+                if (chatOpt.isEmpty()) {
+                    chatOpt = chatRepository.findByTelefonoCliente(cleanTel);
+                }
+                chatOpt.ifPresent(chat -> {
                     chat.setContextoInmediato(null);
                     chat.setFasePedido("INICIAL");
                     chat.setPedidoReferenciadoId(null);
@@ -147,7 +152,20 @@ public class AdminPedidoController {
                     chat.setSugerenciaIa(null);
                     chat.setFechaCorte(java.time.LocalDateTime.now(java.time.ZoneId.of("America/Lima")));
                     chatRepository.save(chat);
-                    System.out.println("[AUDITORÍA RESETEADO] Chat de " + telFinal + " reseteado automáticamente a INICIAL con fechaCorte tras eliminar el pedido ID: " + pedidoId);
+
+                    // Registro de aviso de sistema en el hilo del chat del cliente (CP051 / HU0026)
+                    try {
+                        com.upc.Entity.Mensaje avisoSistema = new com.upc.Entity.Mensaje();
+                        avisoSistema.setChat(chat);
+                        avisoSistema.setContenido("[Sistema]: Pedido pendiente eliminado. Conversación restablecida al estado INICIAL.");
+                        avisoSistema.setRemitente("ADMINISTRADOR");
+                        avisoSistema.setFechaEnvio(java.time.LocalDateTime.now(java.time.ZoneId.of("America/Lima")));
+                        mensajeRepository.save(avisoSistema);
+                    } catch (Exception e) {
+                        System.err.println("No se pudo registrar aviso de sistema en el chat: " + e.getMessage());
+                    }
+
+                    System.out.println("[AUDITORÍA RESETEADO] Chat de " + tel51 + " reseteado automáticamente a INICIAL con fechaCorte y aviso tras eliminar el pedido ID: " + pedidoId);
                 });
             }
 
@@ -306,6 +324,9 @@ public class AdminPedidoController {
 
     @Autowired
     private com.upc.Repository.ChatRepository chatRepository;
+
+    @Autowired
+    private com.upc.Repository.MensajeRepository mensajeRepository;
 
     @PutMapping("/{id}/validar")
     public ResponseEntity<Map<String, Object>> validarPedidoEndpoint(@PathVariable String id) {
