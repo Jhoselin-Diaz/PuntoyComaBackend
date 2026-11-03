@@ -187,17 +187,36 @@ public class ProductoServiceImpl implements ProductoService {
 
     @Override
     @Transactional
-    public ProductoDTO obtenerPorId(Long id) {
+    public ProductoDTO obtenerPorIdPublico(Long id) {
         Producto producto = productoRepository.findById(id)
-            .orElseThrow(() -> new RuntimeException("Producto no encontrado con el ID: " + id));
-        
+            .orElseThrow(() -> new com.upc.Util.ResourceNotFoundException("Producto no encontrado con el ID: " + id));
+
+        // Validación estricta de visibilidad y estado activo para la tienda pública
+        boolean esVisible = Boolean.TRUE.equals(producto.getVisible()) && !Boolean.FALSE.equals(producto.getActivo());
+        if (!esVisible) {
+            throw new com.upc.Util.ResourceNotFoundException("El producto no se encuentra disponible");
+        }
+
         Integer vistas = producto.getVistasContador();
         producto.setVistasContador(vistas == null ? 1 : vistas + 1);
         Producto guardado = productoRepository.save(producto);
-        
+
         return convertToDto(guardado);
     }
 
+    @Override
+    @Transactional(readOnly = true)
+    public ProductoDTO obtenerPorIdAdmin(Long id) {
+        Producto producto = productoRepository.findById(id)
+            .orElseThrow(() -> new com.upc.Util.ResourceNotFoundException("Producto no encontrado con el ID: " + id));
+        return convertToDto(producto);
+    }
+
+    @Override
+    @Transactional
+    public ProductoDTO obtenerPorId(Long id) {
+        return obtenerPorIdPublico(id);
+    }
     @Override
     @Transactional(readOnly = true)
     public List<ProductoDTO> obtenerMasVistos() {
@@ -216,7 +235,7 @@ public class ProductoServiceImpl implements ProductoService {
     @Transactional
     public ProductoDTO crearProductoConImagen(ProductoDTO productoDTO, org.springframework.web.multipart.MultipartFile imagen) {
         if (imagen == null || imagen.isEmpty()) {
-            throw new RuntimeException("La imagen principal es requerida y no puede estar vacía.");
+            throw new RuntimeException("La imagen principal es requerida y no puede estar vacÃ­a.");
         }
 
         // Upload to Supabase Storage
@@ -258,7 +277,7 @@ public class ProductoServiceImpl implements ProductoService {
             java.net.http.HttpResponse<String> response = client.send(request, java.net.http.HttpResponse.BodyHandlers.ofString());
 
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                throw new RuntimeException("Respuesta fallida de Supabase Storage (código " + response.statusCode() + "): " + response.body());
+                throw new RuntimeException("Respuesta fallida de Supabase Storage (cÃ³digo " + response.statusCode() + "): " + response.body());
             }
 
             return supabaseUrl + "/storage/v1/object/public/productos/" + uniqueName;

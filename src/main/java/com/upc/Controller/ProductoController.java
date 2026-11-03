@@ -32,7 +32,7 @@ public class ProductoController {
 
         org.springframework.web.multipart.MultipartFile archivo = (file != null && !file.isEmpty()) ? file : imagen;
         if (archivo == null || archivo.isEmpty()) {
-            return ResponseEntity.badRequest().body(java.util.Map.of("error", "El archivo de imagen es requerido y no puede estar vacío."));
+            return ResponseEntity.badRequest().body(java.util.Map.of("error", "El archivo de imagen es requerido y no puede estar vacÃ­o."));
         }
 
         String originalFilename = archivo.getOriginalFilename();
@@ -91,7 +91,7 @@ public class ProductoController {
             ProductoDTO creado = productoService.crearProductoConImagen(productoDTO, imagen);
             return new ResponseEntity<>(creado, HttpStatus.CREATED);
         } catch (Exception e) {
-            throw new RuntimeException("Error al procesar la creación del producto con imagen: " + e.getMessage(), e);
+            throw new RuntimeException("Error al procesar la creaciÃ³n del producto con imagen: " + e.getMessage(), e);
         }
     }
 
@@ -131,10 +131,29 @@ public class ProductoController {
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<ProductoDTO> obtenerPorId(@PathVariable Long id) {
-        return new ResponseEntity<>(productoService.obtenerPorId(id), HttpStatus.OK);
+    public ResponseEntity<ProductoDTO> obtenerPorId(
+            @PathVariable Long id,
+            jakarta.servlet.http.HttpServletRequest request,
+            @RequestHeader(value = "X-Admin-Role", required = false) String adminHeader) {
+        boolean isAdmin = (request != null && request.getRequestURI() != null && request.getRequestURI().contains("/admin/"))
+                || "ADMIN".equalsIgnoreCase(adminHeader);
+        ProductoDTO dto = isAdmin ? productoService.obtenerPorIdAdmin(id) : productoService.obtenerPorIdPublico(id);
+        return new ResponseEntity<>(dto, HttpStatus.OK);
     }
 
+    @GetMapping("/admin/{id}")
+    public ResponseEntity<ProductoDTO> obtenerPorIdAdmin(@PathVariable Long id) {
+        return new ResponseEntity<>(productoService.obtenerPorIdAdmin(id), HttpStatus.OK);
+    }
+
+    @ExceptionHandler(com.upc.Util.ResourceNotFoundException.class)
+    public ResponseEntity<java.util.Map<String, Object>> handleResourceNotFound(com.upc.Util.ResourceNotFoundException ex) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(java.util.Map.of(
+            "status", 404,
+            "error", "Not Found",
+            "mensaje", ex.getMessage()
+        ));
+    }
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> eliminarProducto(@PathVariable Long id) {
         productoService.eliminarProducto(id);

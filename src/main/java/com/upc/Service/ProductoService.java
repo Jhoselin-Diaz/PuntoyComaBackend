@@ -12,6 +12,8 @@ public interface ProductoService {
     List<ProductoDTO> obtenerPublicos();
     List<ProductoDTO> obtenerMasVistos();
     ProductoDTO obtenerPorId(Long id);
+    ProductoDTO obtenerPorIdPublico(Long id);
+    ProductoDTO obtenerPorIdAdmin(Long id);
     void eliminarProducto(Long id);
     ProductoDTO actualizarVisibilidad(Long id, Boolean visible);
     ProductoDTO actualizarProducto(Long id, ProductoDTO productoDTO);
