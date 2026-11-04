@@ -20,6 +20,7 @@ public class AdminChatController {
     private ChatService chatService;
 
     @GetMapping
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
     public ResponseEntity<List<ChatDTO>> obtenerTodosLosChats() {
         try {
             List<ChatDTO> chats = chatService.obtenerTodosLosChats();
@@ -32,6 +33,7 @@ public class AdminChatController {
     }
 
     @GetMapping("/{chatId}/mensajes")
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
     public ResponseEntity<List<MensajeDTO>> obtenerMensajesDeChat(@PathVariable Long chatId) {
         try {
             List<MensajeDTO> mensajes = chatService.obtenerMensajesDeChat(chatId);

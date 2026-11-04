@@ -353,21 +353,7 @@ public class ChatServiceImpl implements ChatService {
         dto.setDatosCompletos(chat.getDatosCompletos());
         dto.setFasePedido(chat.getFasePedido());
         dto.setContextoInmediato(chat.getContextoInmediato());
-        
-        int totalPeds = 0;
-        try {
-            if (chat.getTelefonoCliente() != null && !chat.getTelefonoCliente().trim().isEmpty()) {
-                String tel = chat.getTelefonoCliente().trim();
-                List<Pedido> peds = pedidoRepository.findByUsuarioTelefono(tel);
-                if (peds != null) {
-                    totalPeds = peds.size();
-                }
-            }
-        } catch (Exception ex) {
-            // Silencioso: JAMÁS una falla al contar pedidos debe romper el listado de chats
-            totalPeds = 0;
-        }
-        dto.setTotalPedidos(totalPeds);
+        dto.setTotalPedidos(0);
         
         return dto;
     }

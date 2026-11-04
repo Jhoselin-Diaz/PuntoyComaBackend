@@ -22,6 +22,7 @@ public class InventarioController {
     private final DashboardService dashboardService;
 
     @GetMapping("/resumen")
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
     public ResponseEntity<Map<String, Object>> obtenerResumenInventario() {
         List<ProductoVigilanciaDTO> masVendidos = dashboardService.obtenerMasVendidos();
         ProductoVigilanciaDTO productoEstrella = (masVendidos != null && !masVendidos.isEmpty())

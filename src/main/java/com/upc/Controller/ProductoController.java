@@ -111,26 +111,31 @@ public class ProductoController {
     }
 
     @GetMapping
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
     public ResponseEntity<List<ProductoDTO>> obtenerTodos() {
         return new ResponseEntity<>(productoService.obtenerTodos(), HttpStatus.OK);
     }
 
     @GetMapping("/movimientos")
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
     public ResponseEntity<List<MovimientoInventarioDTO>> obtenerMovimientos() {
         return new ResponseEntity<>(productoService.obtenerMovimientos(), HttpStatus.OK);
     }
 
     @GetMapping("/publicos")
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
     public ResponseEntity<List<ProductoDTO>> obtenerPublicos() {
         return new ResponseEntity<>(productoService.obtenerPublicos(), HttpStatus.OK);
     }
 
     @GetMapping("/mas-vistos")
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
     public ResponseEntity<List<ProductoDTO>> obtenerMasVistos() {
         return new ResponseEntity<>(productoService.obtenerMasVistos(), HttpStatus.OK);
     }
 
     @GetMapping("/{id}")
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
     public ResponseEntity<ProductoDTO> obtenerPorId(
             @PathVariable Long id,
             jakarta.servlet.http.HttpServletRequest request,
@@ -142,6 +147,7 @@ public class ProductoController {
     }
 
     @GetMapping("/admin/{id}")
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
     public ResponseEntity<ProductoDTO> obtenerPorIdAdmin(@PathVariable Long id) {
         return new ResponseEntity<>(productoService.obtenerPorIdAdmin(id), HttpStatus.OK);
     }

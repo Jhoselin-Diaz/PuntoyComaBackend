@@ -37,6 +37,7 @@ public class AdminPedidoController {
     private com.upc.Service.DashboardService dashboardService;
 
     @GetMapping("/mas-vendidos")
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
     public ResponseEntity<List<com.upc.DTO.ProductoVigilanciaDTO>> obtenerMasVendidos() {
         return ResponseEntity.ok(dashboardService.obtenerMasVendidos());
     }
