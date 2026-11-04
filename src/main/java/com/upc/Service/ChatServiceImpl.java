@@ -194,6 +194,21 @@ public class ChatServiceImpl implements ChatService {
         } else {
             chat.setUnreadCount(chat.getUnreadCount() + 1);
         }
+
+        // AUTO-DETECCIÓN PROACTIVA PARA CARRITO INICIAL:
+        if ("CLIENTE".equalsIgnoreCase(remitente) && contenido != null) {
+            String mLower = contenido.toLowerCase();
+            boolean esCarritoInicialRapido = mLower.contains("confirmar mi pedido") || 
+                    (mLower.contains("subtotal:") && mLower.contains("total:"));
+            if (esCarritoInicialRapido) {
+                chat.setPedidoIdentificado(true);
+                chat.setFasePedido("INICIAL");
+                chat.setPrioridad("NORMAL");
+                if (chat.getSugerenciaIa() == null || chat.getSugerenciaIa().trim().isEmpty() || chat.getSugerenciaIa().contains("En espera de un nuevo mensaje")) {
+                    chat.setSugerenciaIa("¡Hola! Contamos con disponibilidad para tu pedido 😊. Para continuar, por favor, proporciona los siguientes datos de entrega:\n" + OpenAiService.PLANTILLA_DATOS_ENTREGA);
+                }
+            }
+        }
         
         Chat chatGuardado = chatRepository.save(chat);
 
@@ -338,7 +353,16 @@ public class ChatServiceImpl implements ChatService {
 
     @Override
     public com.upc.DTO.ChatDTO regenerarRespuestaIA(Long chatId) {
+        return regenerarRespuestaIA(chatId, null);
+    }
+
+    @Override
+    public com.upc.DTO.ChatDTO regenerarRespuestaIA(Long chatId, String sugerenciaActual) {
         Chat chat = chatRepository.findById(chatId).orElseThrow(() -> new RuntimeException("Chat no encontrado"));
+        String prevSugerencia = (sugerenciaActual != null && !sugerenciaActual.trim().isEmpty())
+                ? sugerenciaActual.trim()
+                : (chat.getSugerenciaIa() != null ? chat.getSugerenciaIa().trim() : "");
+
         List<Mensaje> msgs = mensajeRepository.findTop10ByChatIdOrderByFechaEnvioDesc(chatId);
         String ultimoContenido = "";
         for (Mensaje m : msgs) {
@@ -347,9 +371,26 @@ public class ChatServiceImpl implements ChatService {
                 break;
             }
         }
-        openAiService.generarSoloSugerenciaIA(chatId, chat.getTelefonoCliente(), ultimoContenido);
-        
+        openAiService.generarSoloSugerenciaIA(chatId, chat.getTelefonoCliente(), ultimoContenido, prevSugerencia);
+
         Chat chatActualizado = chatRepository.findById(chatId).orElse(chat);
+        if (prevSugerencia != null && !prevSugerencia.isEmpty() && prevSugerencia.equalsIgnoreCase(chatActualizado.getSugerenciaIa())) {
+            String vars = "tus productos seleccionados";
+            if (chatActualizado.getPedidoReferenciadoId() != null) {
+                Pedido p = pedidoRepository.findById(chatActualizado.getPedidoReferenciadoId()).orElse(null);
+                if (p != null && p.getVariantesEspecificas() != null && !p.getVariantesEspecificas().trim().isEmpty()) {
+                    vars = p.getVariantesEspecificas().trim();
+                }
+            }
+            String alternativa;
+            if ("CONCILIACION".equalsIgnoreCase(chatActualizado.getFasePedido()) || prevSugerencia.contains("comprobante") || prevSugerencia.contains("pago")) {
+                alternativa = openAiService.obtenerAlternativaVoucher(prevSugerencia, null);
+            } else {
+                alternativa = openAiService.obtenerAlternativaMensajeInicial(vars, prevSugerencia);
+            }
+            chatActualizado.setSugerenciaIa(alternativa);
+            chatRepository.save(chatActualizado);
+        }
         return convertChatToDto(chatActualizado);
     }
 }

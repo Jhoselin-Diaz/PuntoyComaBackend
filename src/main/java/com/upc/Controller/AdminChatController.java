@@ -60,8 +60,17 @@ public class AdminChatController {
     }
 
     @PostMapping("/{chatId}/regenerar-ia")
-    public ResponseEntity<com.upc.DTO.ChatDTO> regenerarRespuestaIA(@PathVariable Long chatId) {
-        com.upc.DTO.ChatDTO chatDto = chatService.regenerarRespuestaIA(chatId);
+    public ResponseEntity<com.upc.DTO.ChatDTO> regenerarRespuestaIA(
+            @PathVariable Long chatId,
+            @RequestBody(required = false) java.util.Map<String, String> payload) {
+        String sugerenciaActual = null;
+        if (payload != null) {
+            sugerenciaActual = payload.get("sugerenciaActual");
+            if (sugerenciaActual == null) {
+                sugerenciaActual = payload.get("sugerenciaPrevia");
+            }
+        }
+        com.upc.DTO.ChatDTO chatDto = chatService.regenerarRespuestaIA(chatId, sugerenciaActual);
         return new ResponseEntity<>(chatDto, HttpStatus.OK);
     }
 }

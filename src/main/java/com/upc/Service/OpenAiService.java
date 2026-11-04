@@ -226,8 +226,12 @@ public class OpenAiService {
     }
 
     public void generarSoloSugerenciaIA(Long chatId, String telefono, String mensajeEntrante) {
-        log.info("[OpenAI Service] Generando SOLO SUGERENCIA IA (sin modificar pedidos) para chat ID: {}", chatId);
-        procesarMensajeConIASincrono(chatId, telefono, mensajeEntrante, true);
+        generarSoloSugerenciaIA(chatId, telefono, mensajeEntrante, null);
+    }
+
+    public void generarSoloSugerenciaIA(Long chatId, String telefono, String mensajeEntrante, String sugerenciaActual) {
+        log.info("[OpenAI Service] Generando SOLO SUGERENCIA IA (sin modificar pedidos) para chat ID: {}, sugerenciaActual: {}", chatId, sugerenciaActual);
+        procesarMensajeConIASincrono(chatId, telefono, mensajeEntrante, true, sugerenciaActual);
     }
 
     public static class DatosConciliacionExtraidos {
@@ -258,6 +262,7 @@ public class OpenAiService {
         boolean tienePedidoPendiente;
         String formattedCorpNum;
         String textoProductosCarrito;
+        String sugerenciaActual;
 
         public static ContextoIaPreparado manejadoDeterminista() {
             ContextoIaPreparado c = new ContextoIaPreparado();
@@ -343,16 +348,64 @@ public class OpenAiService {
         return d;
     }
 
+        public String obtenerAlternativaMensajeInicial(String varsFinal, String sugerenciaActual) {
+        String p1 = "¡Hola! Contamos con disponibilidad para " + varsFinal + " 😊. Para continuar, por favor, proporciona los siguientes datos de entrega:\n" + PLANTILLA_DATOS_ENTREGA;
+        String p2 = "¡Excelente elección! Tenemos stock disponible de " + varsFinal + " ✨. Para coordinar el envío de tu pedido, facilítanos por favor tus datos de entrega:\n" + PLANTILLA_DATOS_ENTREGA;
+        String p3 = "Buenas tardes, gusto en saludarte. Confirmamos disponibilidad inmediata de " + varsFinal + " 📦. Para proceder con el registro de tu despacho, requerimos los siguientes datos:\n" + PLANTILLA_DATOS_ENTREGA;
+        String p4 = "¡Hola! Tu selección (" + varsFinal + ") está lista para separar 😊. Por favor compártenos tus datos de entrega para calcular el costo de envío y confirmar tu pedido:\n" + PLANTILLA_DATOS_ENTREGA;
+
+        String[] opciones = new String[] { p1, p2, p3, p4 };
+        if (sugerenciaActual == null || sugerenciaActual.trim().isEmpty()) {
+            return p1;
+        }
+        for (String op : opciones) {
+            if (!op.trim().equalsIgnoreCase(sugerenciaActual.trim())) {
+                return op;
+            }
+        }
+        return p2;
+    }
+
+    public String obtenerAlternativaVoucher(String sugerenciaActual, Pedido pedDestino) {
+        if (pedDestino != null && "VALIDADO".equalsIgnoreCase(pedDestino.getEstado())) {
+            String[] opciones = new String[] {
+                "¡Tu pago ha sido validado con éxito! 🎉 Estamos preparando tu pedido para despacho. Te enviaremos el número de seguimiento en cuanto esté en camino. ¡Muchas gracias por tu compra! ❤️",
+                "¡Confirmamos la recepción conforme de tu pago! 📦 Tu pedido se encuentra en preparación para entrega. Te compartiremos la guía de despacho muy pronto.",
+                "¡Excelente noticia! Tu comprobante fue verificado correctamente ✨. En breve coordinaremos la entrega de tu pedido. ¡Gracias por confiar en Punto y Coma!"
+            };
+            if (sugerenciaActual == null || sugerenciaActual.trim().isEmpty()) return opciones[0];
+            for (String op : opciones) {
+                if (!op.trim().equalsIgnoreCase(sugerenciaActual.trim())) return op;
+            }
+            return opciones[1];
+        } else {
+            String[] opciones = new String[] {
+                "¡Muchas gracias por enviarnos tu comprobante! 🎉 Ya lo tenemos registrado y estamos finalizando la validación de tu pedido para proceder con la entrega.",
+                "Hemos recibido tu comprobante de pago con éxito ✨. Nuestro equipo se encuentra verificando los datos para programar tu entrega a la brevedad.",
+                "¡Comprobante recibido! 🔍 En unos minutos confirmaremos la validación de tu abono para despachar tus productos."
+            };
+            if (sugerenciaActual == null || sugerenciaActual.trim().isEmpty()) return opciones[0];
+            for (String op : opciones) {
+                if (!op.trim().equalsIgnoreCase(sugerenciaActual.trim())) return op;
+            }
+            return opciones[1];
+        }
+    }
+
     public void procesarMensajeConIASincrono(Long chatId, String telefono, String mensajeEntrante, boolean soloSugerencia) {
+        procesarMensajeConIASincrono(chatId, telefono, mensajeEntrante, soloSugerencia, null);
+    }
+
+    public void procesarMensajeConIASincrono(Long chatId, String telefono, String mensajeEntrante, boolean soloSugerencia, String sugerenciaActual) {
         log.info("[OpenAI Service] Iniciando procesamiento SÍNCRONO para el chat ID: {}, Teléfono: {}, soloSugerencia: {}", chatId, telefono, soloSugerencia);
 
         if (this.apiKey != null) {
             this.apiKey = this.apiKey.trim().replaceAll("[}\\s]+$", "").replaceAll("^[{\\s]+", "");
         }
 
-        if (apiKey == null || apiKey.trim().isEmpty() || (apiKey.startsWith("sk-proj-xpb4m") && apiKey.length() < 30)) {
-            log.warn("[OpenAI Service] OpenAI API Key no configurada o incompleta. Se omite llamada.");
-            return;
+        boolean apiKeyValida = (this.apiKey != null && !this.apiKey.trim().isEmpty() && !(this.apiKey.startsWith("sk-proj-xpb4m") && this.apiKey.length() < 30));
+        if (!apiKeyValida) {
+            log.warn("[OpenAI Service] OpenAI API Key no configurada o incompleta. Se omite llamada HTTP externa y se procede con el motor de reglas determinista de respaldo.");
         }
 
         // =========================================================================
@@ -602,13 +655,22 @@ public class OpenAiService {
                 }
 
                 HttpHeaders headers = new HttpHeaders();
-                headers.setContentType(MediaType.APPLICATION_JSON);
-                headers.setBearerAuth(apiKey);
+                if (apiKeyValida) {
+                    headers.setContentType(MediaType.APPLICATION_JSON);
+                    headers.setBearerAuth(apiKey);
+                }
 
                 String formattedCorpNum = formatNumberCommercial(corporateNumber);
 
                 String systemPrompt = "Actúa como el asistente inteligente y experto en ventas de nuestro e-commerce 'Punto y Coma'.\n" +
                         "IMPORTANTE: Operas bajo el modelo de ASISTENCIA HUMANO-IN-THE-LOOP. Tu función es interpretar la conversación, evaluar la disponibilidad real de inventario y proponer una 'respuestaSugerida' para que el administrador la revise y confirme. NUNCA tomas decisiones administrativas autónomas.\n\n";
+
+                if (sugerenciaActual != null && !sugerenciaActual.trim().isEmpty()) {
+                    systemPrompt += "\n\nINSTRUCCIÓN CRÍTICA DE REGENERACIÓN DE SUGERENCIA (CP027):\n" +
+                            "- Genera una alternativa de respuesta válida, coherente y con redacción distinta a la anterior.\n" +
+                            "- No repitas la frase previa: '" + sugerenciaActual.replace("'", "").replace("\"", "") + "'.\n" +
+                            "- Ofrece una opción con tono más conciso, directo o formal según el contexto de la tienda.\n\n";
+                }
 
                 if ("SOLICITAR_FALTANTE".equals(chat.getContextoInmediato())) {
                     systemPrompt += "REGLA DE CONTEXTO DE ACCIÓN INMEDIATA ADMINISTRADOR ACTIVA (SOLICITAR MONTO FALTANTE):\n" +
@@ -692,6 +754,7 @@ public class OpenAiService {
 
                 ObjectNode requestBody = objectMapper.createObjectNode();
                 requestBody.put("model", "gpt-4o-mini");
+                requestBody.put("temperature", (sugerenciaActual != null && !sugerenciaActual.trim().isEmpty()) ? 0.85 : 0.7);
 
                 ArrayNode messagesArray = objectMapper.createArrayNode();
 
@@ -804,7 +867,8 @@ public class OpenAiService {
                 HttpEntity<String> entity = new HttpEntity<>(objectMapper.writeValueAsString(requestBody), headers);
 
                 ContextoIaPreparado prep = new ContextoIaPreparado();
-                prep.entity = entity;
+                prep.entity = apiKeyValida ? entity : null;
+                prep.sugerenciaActual = sugerenciaActual;
                 prep.esCarritoInicial = esCarritoInicial;
                 prep.esCompraNatural = esCompraNatural;
                 prep.esSolicitudDeProductos = esSolicitudDeProductos;
@@ -839,12 +903,16 @@ public class OpenAiService {
         // =========================================================================
         // PASO 2: LLAMADA HTTP A OPENAI (100% FUERA DE CUALQUIER TRANSACCIÓN Y SIN LOCK)
         // =========================================================================
-        log.info("[OpenAI Service] PASO 2: Enviando petición a OpenAI (FUERA DE TRANSACCIÓN BD Hikari, {} mensajes)...", ctx.historial.size());
         String responseStr = null;
-        try {
-            responseStr = restTemplate.postForObject(apiUrl, ctx.entity, String.class);
-        } catch (Exception httpEx) {
-            log.error("[OpenAI Service] Error en llamada HTTP a OpenAI: {}", httpEx.getMessage(), httpEx);
+        if (apiKeyValida && ctx.entity != null) {
+            log.info("[OpenAI Service] PASO 2: Enviando petición a OpenAI (FUERA DE TRANSACCIÓN BD Hikari, {} mensajes)...", ctx.historial.size());
+            try {
+                responseStr = restTemplate.postForObject(apiUrl, ctx.entity, String.class);
+            } catch (Exception httpEx) {
+                log.error("[OpenAI Service] Error en llamada HTTP a OpenAI: {}", httpEx.getMessage(), httpEx);
+            }
+        } else {
+            log.info("[OpenAI Service] Saltando llamada HTTP externa y derivando al motor de reglas determinista de respaldo.");
         }
 
         // =========================================================================
@@ -1604,8 +1672,7 @@ public class OpenAiService {
                                 log.warn("[OpenAI Service] Alerta de desincronización: OpenAI sugirió mensaje de pedido pendiente por arrastre de historial. Limpiando.");
                                 if (ctx.esCarritoInicial) {
                                     String varsFinal = (pedidoPendienteActivo != null && pedidoPendienteActivo.getVariantesEspecificas() != null) ? pedidoPendienteActivo.getVariantesEspecificas() : ctx.textoProductosCarrito;
-                                    respuestaSugerida = "¡Hola! Contamos con disponibilidad para " + varsFinal + " 😊. Para continuar, por favor, proporciona los siguientes datos de entrega:\n" +
-                                            PLANTILLA_DATOS_ENTREGA;
+                                    respuestaSugerida = obtenerAlternativaMensajeInicial(varsFinal, ctx.sugerenciaActual);
                                 } else if (direccionCompletaDefinitiva && pedidoPendienteActivo != null) {
                                     double totalRealBD = pedidoPendienteActivo.getTotal() != null ? pedidoPendienteActivo.getTotal() : 0.0;
                                     String totalRealStr = String.format("%.2f", totalRealBD);
@@ -1719,8 +1786,7 @@ public class OpenAiService {
                                 finalDatosComp = false;
                                 String varsFinal = (pedidoPendienteActivo != null && pedidoPendienteActivo.getVariantesEspecificas() != null && !pedidoPendienteActivo.getVariantesEspecificas().trim().isEmpty()) 
                                         ? pedidoPendienteActivo.getVariantesEspecificas() : ctx.textoProductosCarrito;
-                                respuestaSugerida = "¡Hola! Contamos con disponibilidad para " + varsFinal + " 😊. Para continuar, por favor, proporciona los siguientes datos de entrega:\n" +
-                                        PLANTILLA_DATOS_ENTREGA;
+                                respuestaSugerida = obtenerAlternativaMensajeInicial(varsFinal, ctx.sugerenciaActual);
                             }
                         }
 
@@ -1775,9 +1841,9 @@ public class OpenAiService {
                             chat.setContextoInmediato(null);
                             if (pedDestino != null) chat.setPedidoReferenciadoId(pedDestino.getId());
                             if (pedDestino != null && "VALIDADO".equalsIgnoreCase(pedDestino.getEstado())) {
-                                chat.setSugerenciaIa("¡Tu pago ha sido validado con éxito! 🎉 Estamos preparando tu pedido para despacho. Te enviaremos el número de seguimiento en cuanto esté en camino. ¡Muchas gracias por tu compra! ❤️");
+                                chat.setSugerenciaIa(obtenerAlternativaVoucher(ctx.sugerenciaActual, pedDestino));
                             } else {
-                                chat.setSugerenciaIa("¡Muchas gracias por enviarnos tu comprobante! 🎉 Ya lo tenemos registrado y estamos finalizando la validación de tu pedido para proceder con la entrega.");
+                                chat.setSugerenciaIa(obtenerAlternativaVoucher(ctx.sugerenciaActual, pedDestino));
                             }
                             chatRepository.save(chat);
                             log.info("[OpenAI Service] Fallback determinista exitoso: Comprobante/Voucher procesado para chat ID {}.", chatId);
@@ -1840,76 +1906,80 @@ public class OpenAiService {
 
                         } else if (ctx.esSolicitudDeProductos) {
                             Pedido pedidoPendiente = pedidoRepository.findFirstByUsuarioTelefonoAndEstado(telefono, "PENDIENTE");
-                            if (pedidoPendiente == null) {
-                                Map<Producto, Integer> prodsExtraidos = parsearProductosDeterminista(mensajeEntrante);
-                                Pedido nuevoPed = new Pedido();
-                                nuevoPed.setEstado("PENDIENTE");
-                                nuevoPed.setEstadoPago("SIN_PAGO");
-                                nuevoPed.setMontoDetectado(0.0);
-                                nuevoPed.setDiferencia(0.0);
-                                java.time.ZoneId zoneId = java.time.ZoneId.of("America/Lima");
-                                nuevoPed.setFecha(LocalDateTime.now(zoneId));
-                                nuevoPed.setNumeroOrden("WSP-" + System.currentTimeMillis());
-                                Usuario cliente = usuarioRepository.findByTelefono(telefono).orElseGet(() -> {
-                                    Usuario nc = new Usuario();
-                                    nc.setTelefono(telefono);
-                                    nc.setNombre(chat.getNombreCliente());
-                                    nc.setEmail(telefono + "@puntoycoma.com");
-                                    nc.setPassword("client_pass");
-                                    nc.setRol("CLIENTE");
-                                    nc.setActivo(true);
-                                    nc.setHabilitado(true);
-                                    return usuarioRepository.save(nc);
-                                });
-                                nuevoPed.setUsuario(cliente);
-                                nuevoPed.setNombreCompleto(chat.getNombreCliente());
-                                Pedido pedGuardado = pedidoRepository.save(nuevoPed);
+                            if (pedidoPendiente == null || ctx.esCarritoInicial) {
+                                Pedido pedDest = (ctx.esCarritoInicial && pedidoPendiente != null) ? pedidoPendiente : null;
+                                if (pedDest == null) {
+                                    Map<Producto, Integer> prodsExtraidos = parsearProductosDeterminista(mensajeEntrante);
+                                    Pedido nuevoPed = new Pedido();
+                                    nuevoPed.setEstado("PENDIENTE");
+                                    nuevoPed.setEstadoPago("SIN_PAGO");
+                                    nuevoPed.setMontoDetectado(0.0);
+                                    nuevoPed.setDiferencia(0.0);
+                                    java.time.ZoneId zoneId = java.time.ZoneId.of("America/Lima");
+                                    nuevoPed.setFecha(LocalDateTime.now(zoneId));
+                                    nuevoPed.setNumeroOrden("WSP-" + System.currentTimeMillis());
+                                    Usuario cliente = usuarioRepository.findByTelefono(telefono).orElseGet(() -> {
+                                        Usuario nc = new Usuario();
+                                        nc.setTelefono(telefono);
+                                        nc.setNombre(chat.getNombreCliente());
+                                        nc.setEmail(telefono + "@puntoycoma.com");
+                                        nc.setPassword("client_pass");
+                                        nc.setRol("CLIENTE");
+                                        nc.setActivo(true);
+                                        nc.setHabilitado(true);
+                                        return usuarioRepository.save(nc);
+                                    });
+                                    nuevoPed.setUsuario(cliente);
+                                    nuevoPed.setNombreCompleto(chat.getNombreCliente());
+                                    Pedido pedGuardado = pedidoRepository.save(nuevoPed);
 
-                                double sumaTot = 0.0;
-                                StringBuilder sbVars = new StringBuilder();
-                                for (Map.Entry<Producto, Integer> entry : prodsExtraidos.entrySet()) {
-                                    Producto p = entry.getKey();
-                                    int cant = entry.getValue();
-                                    PedidoDetalle det = new PedidoDetalle();
-                                    det.setPedido(pedGuardado);
-                                    det.setProducto(p);
-                                    det.setCantidad(cant);
-                                    double pUnit = p.getPrecio() != null ? p.getPrecio() : 0.0;
-                                    det.setPrecioUnitario(pUnit);
-                                    pedidoDetalleRepository.save(det);
+                                    double sumaTot = 0.0;
+                                    StringBuilder sbVars = new StringBuilder();
+                                    for (Map.Entry<Producto, Integer> entry : prodsExtraidos.entrySet()) {
+                                        Producto p = entry.getKey();
+                                        int cant = entry.getValue();
+                                        PedidoDetalle det = new PedidoDetalle();
+                                        det.setPedido(pedGuardado);
+                                        det.setProducto(p);
+                                        det.setCantidad(cant);
+                                        double pUnit = p.getPrecio() != null ? p.getPrecio() : 0.0;
+                                        det.setPrecioUnitario(pUnit);
+                                        pedidoDetalleRepository.save(det);
 
-                                    sumaTot += (pUnit * cant);
-                                    if (sbVars.length() > 0) sbVars.append(", ");
-                                    sbVars.append(p.getNombre()).append(" x").append(cant);
+                                        sumaTot += (pUnit * cant);
+                                        if (sbVars.length() > 0) sbVars.append(", ");
+                                        sbVars.append(p.getNombre()).append(" x").append(cant);
+                                    }
+                                    if (sumaTot > 0.0) pedGuardado.setTotal(sumaTot);
+                                    if (sbVars.length() > 0) pedGuardado.setVariantesEspecificas(sbVars.toString());
+                                    pedDest = pedidoRepository.save(pedGuardado);
                                 }
-                                if (sumaTot > 0.0) pedGuardado.setTotal(sumaTot);
-                                if (sbVars.length() > 0) pedGuardado.setVariantesEspecificas(sbVars.toString());
-                                pedGuardado = pedidoRepository.save(pedGuardado);
 
-                                String varsTexto = sbVars.length() > 0 ? sbVars.toString() : "tu pedido";
+                                String varsTexto = (pedDest != null && pedDest.getVariantesEspecificas() != null && !pedDest.getVariantesEspecificas().trim().isEmpty())
+                                        ? pedDest.getVariantesEspecificas().trim() : "tu pedido";
                                 StockCheckResult stockCheckFallback = verificarStockPedido(null, mensajeEntrante, chat.getNombreCliente());
                                 if (stockCheckFallback.isHayStockInsuficiente()) {
                                     chat.setSugerenciaIa(stockCheckFallback.getMensajeSugerido());
                                     chat.setFasePedido("INICIAL");
-                                    chat.setPedidoReferenciadoId(pedGuardado.getId());
+                                    chat.setPedidoReferenciadoId(pedDest.getId());
                                     chat.setPedidoIdentificado(true);
                                     chat.setDireccionDetectada(false);
                                     chat.setDatosCompletos(false);
                                     chat.setContextoInmediato("STOCK_INSUFICIENTE");
                                     chat.setPrioridad("ALTA");
                                 } else {
-                                    String sugerenciaFallback = "¡Hola! Contamos con disponibilidad para " + varsTexto + " 😊. Para continuar, por favor, proporciona los siguientes datos de entrega:\n" +
-                                            PLANTILLA_DATOS_ENTREGA;
+                                    String sugerenciaFallback = obtenerAlternativaMensajeInicial(varsTexto, ctx.sugerenciaActual);
                                     chat.setSugerenciaIa(sugerenciaFallback);
                                     chat.setFasePedido("INICIAL");
-                                    chat.setPedidoReferenciadoId(pedGuardado.getId());
+                                    chat.setPedidoReferenciadoId(pedDest.getId());
                                     chat.setPedidoIdentificado(true);
                                     chat.setDireccionDetectada(false);
                                     chat.setDatosCompletos(false);
                                     chat.setContextoInmediato(null);
+                                    chat.setPrioridad("NORMAL");
                                 }
                                 chatRepository.save(chat);
-                                log.info("[OpenAI Service] Fallback exitoso: Pedido ID {} creado deterministicamente y chat actualizado.", pedGuardado.getId());
+                                log.info("[OpenAI Service] Fallback exitoso: Pedido ID {} procesado deterministicamente y chat actualizado.", pedDest.getId());
                             } else {
                                 String sugerenciaFallback = "🛍️ Tienes un pedido pendiente de S/." + String.format("%.2f", (pedidoPendiente.getTotal() != null ? pedidoPendiente.getTotal() : 0.0)) + ".\n\n" +
                                         "Como acabas de solicitar otros productos, elige una opción:\n\n" +
@@ -1920,8 +1990,17 @@ public class OpenAiService {
                                         "👉 Escribe *CONTINUAR* o *NUEVO*.";
                                 chat.setSugerenciaIa(sugerenciaFallback);
                                 chat.setContextoInmediato("PREGUNTANDO_DECISION_PEDIDO");
+                                chat.setPedidoIdentificado(true);
+                                chat.setFasePedido("INICIAL");
+                                chat.setPrioridad("NORMAL");
                                 chatRepository.save(chat);
                             }
+                        } else {
+                            String nombreSaludo = (chat.getNombreCliente() != null && !chat.getNombreCliente().trim().isEmpty() && !"Cliente".equalsIgnoreCase(chat.getNombreCliente())) ? " " + chat.getNombreCliente() : "";
+                            chat.setSugerenciaIa("¡Hola" + nombreSaludo + "! 😊 ¿En qué podemos ayudarte el día de hoy? Si deseas realizar una compra o consultar sobre nuestros productos, indícanos con gusto.");
+                            chat.setFasePedido("INICIAL");
+                            chat.setPrioridad("NORMAL");
+                            chatRepository.save(chat);
                         }
                     }
                 } catch (Exception e) {
