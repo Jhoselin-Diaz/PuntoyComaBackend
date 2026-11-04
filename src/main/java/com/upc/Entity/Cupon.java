@@ -48,4 +48,7 @@ public class Cupon {
 
     @Column(name = "producto_ids", length = 2048)
     private String productoIds;
+
+    @Column(name = "visible_web")
+    private Boolean visibleWeb = true;
 }

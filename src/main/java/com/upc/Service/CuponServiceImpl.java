@@ -32,6 +32,9 @@ public class CuponServiceImpl implements CuponService {
                 );
             }
         }
+        if (cupon.getVisibleWeb() == null) {
+            cupon.setVisibleWeb(true);
+        }
         if (cupon.getUsosActuales() == null) {
             cupon.setUsosActuales(0);
         }
@@ -66,6 +69,9 @@ public class CuponServiceImpl implements CuponService {
         }
         cupon.setCategoriaAplicable(cuponDetails.getCategoriaAplicable());
         cupon.setProductoIds(cuponDetails.getProductoIds());
+        if (cuponDetails.getVisibleWeb() != null) {
+            cupon.setVisibleWeb(cuponDetails.getVisibleWeb());
+        }
         if (cuponDetails.getUsosActuales() != null) {
             cupon.setUsosActuales(cuponDetails.getUsosActuales());
         }

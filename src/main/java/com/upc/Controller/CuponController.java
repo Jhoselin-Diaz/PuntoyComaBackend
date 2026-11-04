@@ -9,7 +9,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 
 @RestController
-@RequestMapping({"/api/v1/cupones", "/api/cupones"})
+@RequestMapping({"/api/v1/cupones", "/api/cupones", "/api/admin/cupones"})
 @CrossOrigin(origins = {"http://localhost:4200", "https://puntoycoma-store.netlify.app", "https://puntoycoma-store.netlify.app/"})
 public class CuponController {
 
