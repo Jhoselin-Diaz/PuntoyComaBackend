@@ -1349,7 +1349,38 @@ public class OpenAiService {
                                 Pedido pedidoExistente = null;
                                 boolean esFlujoContinuar = false;
 
-                                if ("NUEVO".equals(intencionPedido)) {
+                                if (ctx.esCarritoInicial) {
+                                    if (tienePendienteActivo && pedidoPendienteActivo != null) {
+                                        log.info("[OpenAI Service] Carrito inicial recibido. Marcando pedido PENDIENTE anterior ID {} como RECHAZADO por creación de nuevo pedido.", pedidoPendienteActivo.getId());
+                                        pedidoPendienteActivo.setEstado("RECHAZADO");
+                                        pedidoPendienteActivo.setResultadoConciliacion("RECHAZADO POR CREACIÓN DE NUEVO PEDIDO");
+                                        pedidoRepository.save(pedidoPendienteActivo);
+                                    }
+                                    log.info("[OpenAI Service] Creando nueva orden PENDIENTE para carrito inicial.");
+                                    pedidoExistente = new Pedido();
+                                    pedidoExistente.setEstado("PENDIENTE");
+                                    pedidoExistente.setEstadoPago("SIN_PAGO");
+                                    pedidoExistente.setMontoDetectado(0.0);
+                                    pedidoExistente.setDiferencia(0.0);
+                                    java.time.ZoneId zoneId = java.time.ZoneId.of("America/Lima");
+                                    pedidoExistente.setFecha(LocalDateTime.now(zoneId));
+                                    pedidoExistente.setNumeroOrden("WSP-" + System.currentTimeMillis());
+
+                                    Usuario cliente = usuarioRepository.findByTelefono(telefono).orElseGet(() -> {
+                                        Usuario nuevoCliente = new Usuario();
+                                        nuevoCliente.setTelefono(telefono);
+                                        nuevoCliente.setNombre(chat.getNombreCliente());
+                                        nuevoCliente.setEmail(telefono + "@puntoycoma.com");
+                                        nuevoCliente.setPassword("client_pass");
+                                        nuevoCliente.setRol("CLIENTE");
+                                        nuevoCliente.setActivo(true);
+                                        nuevoCliente.setHabilitado(true);
+                                        return usuarioRepository.save(nuevoCliente);
+                                    });
+                                    pedidoExistente.setUsuario(cliente);
+                                    pedidoExistente.setNombreCompleto(chat.getNombreCliente());
+                                    chat.setContextoInmediato(null);
+                                } else if ("NUEVO".equals(intencionPedido)) {
                                     if (tienePendienteActivo && pedidoPendienteActivo != null && ctx.cantidadPedidosPendientesPrevios > 0) {
                                         log.info("[OpenAI Service] Marcando pedido PENDIENTE anterior ID {} como RECHAZADO por creación de nuevo pedido.", pedidoPendienteActivo.getId());
                                         pedidoPendienteActivo.setEstado("RECHAZADO");
@@ -1357,32 +1388,27 @@ public class OpenAiService {
                                         pedidoRepository.save(pedidoPendienteActivo);
                                     }
 
-                                    if (ctx.esCarritoInicial && pedidoPendienteActivo != null && ctx.cantidadPedidosPendientesPrevios == 0) {
-                                        log.info("[OpenAI Service] Carrito inicial recibido con pedido PENDIENTE ID {} ya iniciado para este carrito. Reutilizando pedido.", pedidoPendienteActivo.getId());
-                                        pedidoExistente = pedidoPendienteActivo;
-                                    } else {
-                                        pedidoExistente = new Pedido();
-                                        pedidoExistente.setEstado("PENDIENTE");
-                                        pedidoExistente.setEstadoPago("SIN_PAGO");
-                                        pedidoExistente.setMontoDetectado(0.0);
-                                        pedidoExistente.setDiferencia(0.0);
-                                        java.time.ZoneId zoneId = java.time.ZoneId.of("America/Lima");
-                                        pedidoExistente.setFecha(LocalDateTime.now(zoneId));
-                                        pedidoExistente.setNumeroOrden("WSP-" + System.currentTimeMillis());
+                                    pedidoExistente = new Pedido();
+                                    pedidoExistente.setEstado("PENDIENTE");
+                                    pedidoExistente.setEstadoPago("SIN_PAGO");
+                                    pedidoExistente.setMontoDetectado(0.0);
+                                    pedidoExistente.setDiferencia(0.0);
+                                    java.time.ZoneId zoneId = java.time.ZoneId.of("America/Lima");
+                                    pedidoExistente.setFecha(LocalDateTime.now(zoneId));
+                                    pedidoExistente.setNumeroOrden("WSP-" + System.currentTimeMillis());
 
-                                        Usuario cliente = usuarioRepository.findByTelefono(telefono).orElseGet(() -> {
-                                            Usuario nuevoCliente = new Usuario();
-                                            nuevoCliente.setTelefono(telefono);
-                                            nuevoCliente.setNombre(chat.getNombreCliente());
-                                            nuevoCliente.setEmail(telefono + "@puntoycoma.com");
-                                            nuevoCliente.setPassword("client_pass");
-                                            nuevoCliente.setRol("CLIENTE");
-                                            nuevoCliente.setActivo(true);
-                                            nuevoCliente.setHabilitado(true);
-                                            return usuarioRepository.save(nuevoCliente);
-                                        });
-                                        pedidoExistente.setUsuario(cliente);
-                                    }
+                                    Usuario cliente = usuarioRepository.findByTelefono(telefono).orElseGet(() -> {
+                                        Usuario nuevoCliente = new Usuario();
+                                        nuevoCliente.setTelefono(telefono);
+                                        nuevoCliente.setNombre(chat.getNombreCliente());
+                                        nuevoCliente.setEmail(telefono + "@puntoycoma.com");
+                                        nuevoCliente.setPassword("client_pass");
+                                        nuevoCliente.setRol("CLIENTE");
+                                        nuevoCliente.setActivo(true);
+                                        nuevoCliente.setHabilitado(true);
+                                        return usuarioRepository.save(nuevoCliente);
+                                    });
+                                    pedidoExistente.setUsuario(cliente);
                                     chat.setContextoInmediato(null);
                                 } else if ("CONTINUAR".equals(intencionPedido) && tienePendienteActivo) {
                                     log.info("[OpenAI Service] Intención CONTINUAR detectada explícitamente. Reutilizando pedido PENDIENTE ID {}.", pedidoPendienteActivo.getId());
@@ -1611,11 +1637,35 @@ public class OpenAiService {
 
                                         if (sumaTotales > 0.0) {
                                             pedidoGuardado.setTotal(sumaTotales);
+                                        } else if (pedidoGuardado.getTotal() == null || pedidoGuardado.getTotal() <= 0.0) {
+                                            double totalExtraidoRegex = 0.0;
+                                            try {
+                                                java.util.regex.Matcher mTot = java.util.regex.Pattern.compile("total:\\s*(?:s/?\\.?\\s*)?([0-9]+(?:\\.[0-9]+)?)", java.util.regex.Pattern.CASE_INSENSITIVE).matcher(mensajeEntrante);
+                                                if (mTot.find()) {
+                                                    totalExtraidoRegex = Double.parseDouble(mTot.group(1).trim());
+                                                }
+                                            } catch (Exception ignored) {}
+                                            if (totalExtraidoRegex > 0.0) {
+                                                pedidoGuardado.setTotal(totalExtraidoRegex);
+                                            }
                                         }
                                         if (sbVariantes.length() > 0) {
                                             pedidoGuardado.setVariantesEspecificas(sbVariantes.toString());
+                                        } else if (pedidoGuardado.getVariantesEspecificas() == null || pedidoGuardado.getVariantesEspecificas().trim().isEmpty()) {
+                                            try {
+                                                StringBuilder sbVarsBackup = new StringBuilder();
+                                                java.util.regex.Matcher mItems = java.util.regex.Pattern.compile("[-*•]?\\s*([^\\n\\r()]+?)\\s*\\(cantidad:\\s*([0-9a-zA-Z]+)\\)", java.util.regex.Pattern.CASE_INSENSITIVE).matcher(mensajeEntrante);
+                                                while (mItems.find()) {
+                                                    if (sbVarsBackup.length() > 0) sbVarsBackup.append(", ");
+                                                    sbVarsBackup.append(mItems.group(1).trim()).append(" x").append(mItems.group(2).trim());
+                                                }
+                                                if (sbVarsBackup.length() > 0) {
+                                                    pedidoGuardado.setVariantesEspecificas(sbVarsBackup.toString());
+                                                }
+                                            } catch (Exception ignored) {}
                                         }
                                         pedidoRepository.save(pedidoGuardado);
+                                        chat.setPedidoReferenciadoId(pedidoGuardado.getId());
                                         log.info("[DATABASE] PedidoDetalle acumulado para Pedido ID: {}. Total acumulado: S/ {}", pedidoGuardado.getId(), sumaTotales);
 
                                         if (esFlujoContinuar && sumaTotales > 0.0) {
@@ -1906,56 +1956,87 @@ public class OpenAiService {
 
                         } else if (ctx.esSolicitudDeProductos) {
                             Pedido pedidoPendiente = pedidoRepository.findFirstByUsuarioTelefonoAndEstado(telefono, "PENDIENTE");
-                            if (pedidoPendiente == null || ctx.esCarritoInicial) {
-                                Pedido pedDest = (ctx.esCarritoInicial && pedidoPendiente != null) ? pedidoPendiente : null;
-                                if (pedDest == null) {
-                                    Map<Producto, Integer> prodsExtraidos = parsearProductosDeterminista(mensajeEntrante);
-                                    Pedido nuevoPed = new Pedido();
-                                    nuevoPed.setEstado("PENDIENTE");
-                                    nuevoPed.setEstadoPago("SIN_PAGO");
-                                    nuevoPed.setMontoDetectado(0.0);
-                                    nuevoPed.setDiferencia(0.0);
-                                    java.time.ZoneId zoneId = java.time.ZoneId.of("America/Lima");
-                                    nuevoPed.setFecha(LocalDateTime.now(zoneId));
-                                    nuevoPed.setNumeroOrden("WSP-" + System.currentTimeMillis());
-                                    Usuario cliente = usuarioRepository.findByTelefono(telefono).orElseGet(() -> {
-                                        Usuario nc = new Usuario();
-                                        nc.setTelefono(telefono);
-                                        nc.setNombre(chat.getNombreCliente());
-                                        nc.setEmail(telefono + "@puntoycoma.com");
-                                        nc.setPassword("client_pass");
-                                        nc.setRol("CLIENTE");
-                                        nc.setActivo(true);
-                                        nc.setHabilitado(true);
-                                        return usuarioRepository.save(nc);
-                                    });
-                                    nuevoPed.setUsuario(cliente);
-                                    nuevoPed.setNombreCompleto(chat.getNombreCliente());
-                                    Pedido pedGuardado = pedidoRepository.save(nuevoPed);
-
-                                    double sumaTot = 0.0;
-                                    StringBuilder sbVars = new StringBuilder();
-                                    for (Map.Entry<Producto, Integer> entry : prodsExtraidos.entrySet()) {
-                                        Producto p = entry.getKey();
-                                        int cant = entry.getValue();
-                                        PedidoDetalle det = new PedidoDetalle();
-                                        det.setPedido(pedGuardado);
-                                        det.setProducto(p);
-                                        det.setCantidad(cant);
-                                        double pUnit = p.getPrecio() != null ? p.getPrecio() : 0.0;
-                                        det.setPrecioUnitario(pUnit);
-                                        pedidoDetalleRepository.save(det);
-
-                                        sumaTot += (pUnit * cant);
-                                        if (sbVars.length() > 0) sbVars.append(", ");
-                                        sbVars.append(p.getNombre()).append(" x").append(cant);
-                                    }
-                                    if (sumaTot > 0.0) pedGuardado.setTotal(sumaTot);
-                                    if (sbVars.length() > 0) pedGuardado.setVariantesEspecificas(sbVars.toString());
-                                    pedDest = pedidoRepository.save(pedGuardado);
+                            if (ctx.esCarritoInicial || pedidoPendiente == null) {
+                                if (pedidoPendiente != null && ctx.esCarritoInicial) {
+                                    log.info("[OpenAI Service Fallback] Cerrando pedido PENDIENTE anterior ID {} por llegada de nuevo carrito.", pedidoPendiente.getId());
+                                    pedidoPendiente.setEstado("RECHAZADO");
+                                    pedidoPendiente.setResultadoConciliacion("RECHAZADO POR NUEVO CARRITO WEB");
+                                    pedidoRepository.save(pedidoPendiente);
                                 }
 
-                                String varsTexto = (pedDest != null && pedDest.getVariantesEspecificas() != null && !pedDest.getVariantesEspecificas().trim().isEmpty())
+                                Map<Producto, Integer> prodsExtraidos = parsearProductosDeterminista(mensajeEntrante);
+                                Pedido nuevoPed = new Pedido();
+                                nuevoPed.setEstado("PENDIENTE");
+                                nuevoPed.setEstadoPago("SIN_PAGO");
+                                nuevoPed.setMontoDetectado(0.0);
+                                nuevoPed.setDiferencia(0.0);
+                                java.time.ZoneId zoneId = java.time.ZoneId.of("America/Lima");
+                                nuevoPed.setFecha(LocalDateTime.now(zoneId));
+                                nuevoPed.setNumeroOrden("WSP-" + System.currentTimeMillis());
+                                Usuario cliente = usuarioRepository.findByTelefono(telefono).orElseGet(() -> {
+                                    Usuario nc = new Usuario();
+                                    nc.setTelefono(telefono);
+                                    nc.setNombre(chat.getNombreCliente());
+                                    nc.setEmail(telefono + "@puntoycoma.com");
+                                    nc.setPassword("client_pass");
+                                    nc.setRol("CLIENTE");
+                                    nc.setActivo(true);
+                                    nc.setHabilitado(true);
+                                    return usuarioRepository.save(nc);
+                                });
+                                nuevoPed.setUsuario(cliente);
+                                nuevoPed.setNombreCompleto(chat.getNombreCliente());
+                                Pedido pedGuardado = pedidoRepository.save(nuevoPed);
+
+                                double sumaTot = 0.0;
+                                StringBuilder sbVars = new StringBuilder();
+                                for (Map.Entry<Producto, Integer> entry : prodsExtraidos.entrySet()) {
+                                    Producto p = entry.getKey();
+                                    int cant = entry.getValue();
+                                    PedidoDetalle det = new PedidoDetalle();
+                                    det.setPedido(pedGuardado);
+                                    det.setProducto(p);
+                                    det.setCantidad(cant);
+                                    double pUnit = p.getPrecio() != null ? p.getPrecio() : 0.0;
+                                    det.setPrecioUnitario(pUnit);
+                                    pedidoDetalleRepository.save(det);
+
+                                    sumaTot += (pUnit * cant);
+                                    if (sbVars.length() > 0) sbVars.append(", ");
+                                    sbVars.append(p.getNombre()).append(" x").append(cant);
+                                }
+
+                                // Respaldo de Monto Total y variantes por Regex si sumaTot es 0 o faltaron productos
+                                double totalExtraidoRegex = 0.0;
+                                try {
+                                    java.util.regex.Matcher mTot = java.util.regex.Pattern.compile("total:\\s*(?:s/?\\.?\\s*)?([0-9]+(?:\\.[0-9]+)?)", java.util.regex.Pattern.CASE_INSENSITIVE).matcher(mensajeEntrante);
+                                    if (mTot.find()) {
+                                        totalExtraidoRegex = Double.parseDouble(mTot.group(1).trim());
+                                    }
+                                } catch (Exception ignored) {}
+
+                                if (sumaTot > 0.0) {
+                                    pedGuardado.setTotal(sumaTot);
+                                } else if (totalExtraidoRegex > 0.0) {
+                                    pedGuardado.setTotal(totalExtraidoRegex);
+                                }
+
+                                if (sbVars.length() == 0) {
+                                    try {
+                                        java.util.regex.Matcher mItems = java.util.regex.Pattern.compile("[-*•]?\\s*([^\\n\\r()]+?)\\s*\\(cantidad:\\s*([0-9a-zA-Z]+)\\)", java.util.regex.Pattern.CASE_INSENSITIVE).matcher(mensajeEntrante);
+                                        while (mItems.find()) {
+                                            if (sbVars.length() > 0) sbVars.append(", ");
+                                            sbVars.append(mItems.group(1).trim()).append(" x").append(mItems.group(2).trim());
+                                        }
+                                    } catch (Exception ignored) {}
+                                }
+                                if (sbVars.length() > 0) {
+                                    pedGuardado.setVariantesEspecificas(sbVars.toString());
+                                }
+
+                                Pedido pedDest = pedidoRepository.save(pedGuardado);
+
+                                String varsTexto = (pedDest.getVariantesEspecificas() != null && !pedDest.getVariantesEspecificas().trim().isEmpty())
                                         ? pedDest.getVariantesEspecificas().trim() : "tu pedido";
                                 StockCheckResult stockCheckFallback = verificarStockPedido(null, mensajeEntrante, chat.getNombreCliente());
                                 if (stockCheckFallback.isHayStockInsuficiente()) {

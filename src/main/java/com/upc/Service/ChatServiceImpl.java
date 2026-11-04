@@ -204,9 +204,14 @@ public class ChatServiceImpl implements ChatService {
                 chat.setPedidoIdentificado(true);
                 chat.setFasePedido("INICIAL");
                 chat.setPrioridad("NORMAL");
-                if (chat.getSugerenciaIa() == null || chat.getSugerenciaIa().trim().isEmpty() || chat.getSugerenciaIa().contains("En espera de un nuevo mensaje")) {
-                    chat.setSugerenciaIa("¡Hola! Contamos con disponibilidad para tu pedido 😊. Para continuar, por favor, proporciona los siguientes datos de entrega:\n" + OpenAiService.PLANTILLA_DATOS_ENTREGA);
+                if (chat.getSugerenciaIa() == null || chat.getSugerenciaIa().trim().isEmpty() || 
+                    chat.getSugerenciaIa().contains("En espera de un nuevo mensaje") ||
+                    chat.getSugerenciaIa().contains("comprobante") || chat.getSugerenciaIa().contains("pago")) {
+                    String nombreSaludo = (chat.getNombreCliente() != null && !chat.getNombreCliente().trim().isEmpty() && !"Cliente Nuevo".equalsIgnoreCase(chat.getNombreCliente()) && !"Cliente".equalsIgnoreCase(chat.getNombreCliente()))
+                            ? " " + chat.getNombreCliente().trim() : "";
+                    chat.setSugerenciaIa("¡Hola" + nombreSaludo + "! Contamos con disponibilidad para tu pedido 😊. Para proceder con el despacho y confirmación, por favor compártenos tus datos de entrega:\n" + OpenAiService.PLANTILLA_DATOS_ENTREGA);
                 }
+                chat = chatRepository.saveAndFlush(chat);
             }
         }
         
@@ -329,12 +334,19 @@ public class ChatServiceImpl implements ChatService {
         dto.setUnreadCount(chat.getUnreadCount());
         dto.setPrioridad(chat.getPrioridad());
         dto.setSugerenciaIa(chat.getSugerenciaIa());
+        dto.setMensajeGenerado(chat.getSugerenciaIa());
         dto.setPedidoReferenciadoId(chat.getPedidoReferenciadoId());
         dto.setPedidoIdentificado(chat.getPedidoIdentificado());
         dto.setDireccionDetectada(chat.getDireccionDetectada());
         dto.setDatosCompletos(chat.getDatosCompletos());
         dto.setFasePedido(chat.getFasePedido());
         dto.setContextoInmediato(chat.getContextoInmediato());
+        if (chat.getTelefonoCliente() != null && !chat.getTelefonoCliente().trim().isEmpty()) {
+            List<Pedido> peds = pedidoRepository.findByUsuarioTelefono(chat.getTelefonoCliente());
+            dto.setTotalPedidos(peds != null ? peds.size() : 0);
+        } else {
+            dto.setTotalPedidos(0);
+        }
         return dto;
     }
 
@@ -371,7 +383,18 @@ public class ChatServiceImpl implements ChatService {
                 break;
             }
         }
-        openAiService.generarSoloSugerenciaIA(chatId, chat.getTelefonoCliente(), ultimoContenido, prevSugerencia);
+
+        String ultimoContenidoLower = ultimoContenido != null ? ultimoContenido.toLowerCase() : "";
+        boolean esCarrito = ultimoContenidoLower.contains("confirmar mi pedido") || 
+                (ultimoContenidoLower.contains("subtotal:") && ultimoContenidoLower.contains("total:"));
+        boolean tienePedidoValido = chat.getPedidoReferenciadoId() != null && pedidoRepository.existsById(chat.getPedidoReferenciadoId());
+
+        if (esCarrito && !tienePedidoValido) {
+            System.out.println("[ChatService] regenerarRespuestaIA detectó carrito sin Pedido en BD. Creando pedido y sincronizando de forma síncrona...");
+            openAiService.procesarMensajeConIASincrono(chatId, chat.getTelefonoCliente(), ultimoContenido, false, prevSugerencia);
+        } else {
+            openAiService.generarSoloSugerenciaIA(chatId, chat.getTelefonoCliente(), ultimoContenido, prevSugerencia);
+        }
 
         Chat chatActualizado = chatRepository.findById(chatId).orElse(chat);
         if (prevSugerencia != null && !prevSugerencia.isEmpty() && prevSugerencia.equalsIgnoreCase(chatActualizado.getSugerenciaIa())) {

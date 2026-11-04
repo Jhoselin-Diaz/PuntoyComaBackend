@@ -17,10 +17,12 @@ public class ChatDTO {
     private Integer unreadCount;
     private String prioridad;
     private String sugerenciaIa;
+    private String mensajeGenerado;
     private Long pedidoReferenciadoId;
     private Boolean pedidoIdentificado;
     private Boolean direccionDetectada;
     private Boolean datosCompletos;
     private String fasePedido;
     private String contextoInmediato;
+    private Integer totalPedidos;
 }
