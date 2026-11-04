@@ -45,9 +45,20 @@ public class ChatServiceImpl implements ChatService {
     @Override
     @Transactional(readOnly = true)
     public List<ChatDTO> obtenerTodosLosChats() {
-        return chatRepository.findAllChatsOrderedByPriorityAndDate().stream()
-                .map(this::convertChatToDto)
-                .collect(Collectors.toList());
+        try {
+            List<Chat> chats = chatRepository.findAllChatsOrderedByPriorityAndDate();
+            if (chats == null) {
+                return new java.util.ArrayList<>();
+            }
+            return chats.stream()
+                    .map(this::convertChatToDto)
+                    .filter(java.util.Objects::nonNull)
+                    .collect(Collectors.toList());
+        } catch (Exception e) {
+            System.err.println("[ChatService] Error en obtenerTodosLosChats: " + e.getMessage());
+            e.printStackTrace();
+            return new java.util.ArrayList<>();
+        }
     }
 
     @Override
@@ -325,13 +336,14 @@ public class ChatServiceImpl implements ChatService {
     }
 
     private ChatDTO convertChatToDto(Chat chat) {
+        if (chat == null) return null;
         ChatDTO dto = new ChatDTO();
         dto.setId(chat.getId());
         dto.setTelefonoCliente(chat.getTelefonoCliente());
         dto.setNombreCliente(chat.getNombreCliente());
         dto.setUltimoMensaje(sanitizarUltimoMensaje(chat.getUltimoMensaje()));
         dto.setFechaUltimaActualizacion(chat.getFechaUltimaActualizacion());
-        dto.setUnreadCount(chat.getUnreadCount());
+        dto.setUnreadCount(chat.getUnreadCount() != null ? chat.getUnreadCount() : 0);
         dto.setPrioridad(chat.getPrioridad());
         dto.setSugerenciaIa(chat.getSugerenciaIa());
         dto.setMensajeGenerado(chat.getSugerenciaIa());
@@ -341,12 +353,22 @@ public class ChatServiceImpl implements ChatService {
         dto.setDatosCompletos(chat.getDatosCompletos());
         dto.setFasePedido(chat.getFasePedido());
         dto.setContextoInmediato(chat.getContextoInmediato());
-        if (chat.getTelefonoCliente() != null && !chat.getTelefonoCliente().trim().isEmpty()) {
-            List<Pedido> peds = pedidoRepository.findByUsuarioTelefono(chat.getTelefonoCliente());
-            dto.setTotalPedidos(peds != null ? peds.size() : 0);
-        } else {
-            dto.setTotalPedidos(0);
+        
+        int totalPeds = 0;
+        try {
+            if (chat.getTelefonoCliente() != null && !chat.getTelefonoCliente().trim().isEmpty()) {
+                String tel = chat.getTelefonoCliente().trim();
+                List<Pedido> peds = pedidoRepository.findByUsuarioTelefono(tel);
+                if (peds != null) {
+                    totalPeds = peds.size();
+                }
+            }
+        } catch (Exception ex) {
+            // Silencioso: JAMÁS una falla al contar pedidos debe romper el listado de chats
+            totalPeds = 0;
         }
+        dto.setTotalPedidos(totalPeds);
+        
         return dto;
     }
 

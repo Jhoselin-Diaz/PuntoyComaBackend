@@ -21,14 +21,26 @@ public class AdminChatController {
 
     @GetMapping
     public ResponseEntity<List<ChatDTO>> obtenerTodosLosChats() {
-        List<ChatDTO> chats = chatService.obtenerTodosLosChats();
-        return new ResponseEntity<>(chats, HttpStatus.OK);
+        try {
+            List<ChatDTO> chats = chatService.obtenerTodosLosChats();
+            return new ResponseEntity<>(chats != null ? chats : new java.util.ArrayList<>(), HttpStatus.OK);
+        } catch (Exception e) {
+            System.err.println("[AdminChatController] Error al obtener chats: " + e.getMessage());
+            e.printStackTrace();
+            return new ResponseEntity<>(new java.util.ArrayList<>(), HttpStatus.OK);
+        }
     }
 
     @GetMapping("/{chatId}/mensajes")
     public ResponseEntity<List<MensajeDTO>> obtenerMensajesDeChat(@PathVariable Long chatId) {
-        List<MensajeDTO> mensajes = chatService.obtenerMensajesDeChat(chatId);
-        return new ResponseEntity<>(mensajes, HttpStatus.OK);
+        try {
+            List<MensajeDTO> mensajes = chatService.obtenerMensajesDeChat(chatId);
+            return new ResponseEntity<>(mensajes != null ? mensajes : new java.util.ArrayList<>(), HttpStatus.OK);
+        } catch (Exception e) {
+            System.err.println("[AdminChatController] Error al obtener mensajes de chat " + chatId + ": " + e.getMessage());
+            e.printStackTrace();
+            return new ResponseEntity<>(new java.util.ArrayList<>(), HttpStatus.OK);
+        }
     }
 
     @PostMapping("/{chatId}/enviar")

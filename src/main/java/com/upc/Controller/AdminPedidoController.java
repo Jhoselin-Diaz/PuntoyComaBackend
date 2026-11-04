@@ -42,15 +42,29 @@ public class AdminPedidoController {
     }
 
     @GetMapping
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
     public ResponseEntity<List<Map<String, Object>>> obtenerTodosLosPedidos() {
-        List<Pedido> pedidos = pedidoRepository.findAll();
-        return new ResponseEntity<>(mapPedidosToResponse(pedidos), HttpStatus.OK);
+        try {
+            List<Pedido> pedidos = pedidoRepository.findAll();
+            return new ResponseEntity<>(mapPedidosToResponse(pedidos), HttpStatus.OK);
+        } catch (Exception e) {
+            System.err.println("[AdminPedidoController] Error al obtener pedidos: " + e.getMessage());
+            e.printStackTrace();
+            return new ResponseEntity<>(new ArrayList<>(), HttpStatus.OK);
+        }
     }
 
     @GetMapping("/cliente/{telefono}")
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
     public ResponseEntity<List<Map<String, Object>>> obtenerPedidosDeCliente(@PathVariable String telefono) {
-        List<Pedido> pedidos = pedidoRepository.findByUsuarioTelefono(telefono);
-        return new ResponseEntity<>(mapPedidosToResponse(pedidos), HttpStatus.OK);
+        try {
+            List<Pedido> pedidos = pedidoRepository.findByUsuarioTelefono(telefono);
+            return new ResponseEntity<>(mapPedidosToResponse(pedidos), HttpStatus.OK);
+        } catch (Exception e) {
+            System.err.println("[AdminPedidoController] Error al obtener pedidos de cliente " + telefono + ": " + e.getMessage());
+            e.printStackTrace();
+            return new ResponseEntity<>(new ArrayList<>(), HttpStatus.OK);
+        }
     }
 
     private java.util.Optional<Pedido> buscarPedidoPorIdFlexible(String idStr) {
@@ -106,19 +120,24 @@ public class AdminPedidoController {
     }
 
     private String getClienteKey(Pedido p) {
-        if (p.getUsuario() != null && p.getUsuario().getId() != null) {
-            return "U_" + p.getUsuario().getId();
-        }
+        if (p == null) return "UNKNOWN";
+        try {
+            if (p.getUsuario() != null && p.getUsuario().getId() != null) {
+                return "U_" + p.getUsuario().getId();
+            }
+        } catch (Exception ignored) {}
         if (p.getTelefonoContacto() != null && !p.getTelefonoContacto().trim().isEmpty()) {
             return "T_" + p.getTelefonoContacto().replaceAll("[^\\d]", "");
         }
-        if (p.getUsuario() != null && p.getUsuario().getTelefono() != null && !p.getUsuario().getTelefono().trim().isEmpty()) {
-            return "T_" + p.getUsuario().getTelefono().replaceAll("[^\\d]", "");
-        }
+        try {
+            if (p.getUsuario() != null && p.getUsuario().getTelefono() != null && !p.getUsuario().getTelefono().trim().isEmpty()) {
+                return "T_" + p.getUsuario().getTelefono().replaceAll("[^\\d]", "");
+            }
+        } catch (Exception ignored) {}
         if (p.getNombreCompleto() != null && !p.getNombreCompleto().trim().isEmpty()) {
             return "N_" + p.getNombreCompleto().trim().toLowerCase();
         }
-        return "P_" + p.getId();
+        return "P_" + (p.getId() != null ? p.getId() : "0");
     }
 
     @DeleteMapping("/{id}")
@@ -198,6 +217,7 @@ public class AdminPedidoController {
         // Agrupar pedidos no validados por cliente para determinar "1er Pendiente" vs "Pendiente"
         Map<String, List<Pedido>> pendientesPorCliente = new HashMap<>();
         for (Pedido p : pedidos) {
+            if (p == null) continue;
             String est = p.getEstado();
             boolean esValidado = "VALIDADO".equalsIgnoreCase(est);
             boolean esRechazado = "RECHAZADO".equalsIgnoreCase(est);
@@ -222,14 +242,31 @@ public class AdminPedidoController {
         }
 
         for (Pedido p : pedidos) {
+            if (p == null) continue;
             Map<String, Object> map = new HashMap<>();
             map.put("id", p.getNumeroOrden() != null ? p.getNumeroOrden() : "#ORD-00" + p.getId());
             map.put("dbId", p.getId());
-            map.put("cliente", p.getNombreCompleto() != null ? p.getNombreCompleto() : 
-                     (p.getUsuario() != null ? p.getUsuario().getNombre() : "Cliente WhatsApp"));
+            String clienteNom = "Cliente WhatsApp";
+            try {
+                if (p.getNombreCompleto() != null && !p.getNombreCompleto().trim().isEmpty()) {
+                    clienteNom = p.getNombreCompleto();
+                } else if (p.getUsuario() != null && p.getUsuario().getNombre() != null) {
+                    clienteNom = p.getUsuario().getNombre();
+                }
+            } catch (Exception ignored) {}
+            map.put("cliente", clienteNom);
+
             map.put("dni", p.getDni() != null ? p.getDni() : "");
-            map.put("telefono", p.getTelefonoContacto() != null ? p.getTelefonoContacto() : 
-                     (p.getUsuario() != null ? p.getUsuario().getTelefono() : ""));
+
+            String telContacto = "";
+            try {
+                if (p.getTelefonoContacto() != null && !p.getTelefonoContacto().trim().isEmpty()) {
+                    telContacto = p.getTelefonoContacto();
+                } else if (p.getUsuario() != null && p.getUsuario().getTelefono() != null) {
+                    telContacto = p.getUsuario().getTelefono();
+                }
+            } catch (Exception ignored) {}
+            map.put("telefono", telContacto);
             map.put("direccion", p.getDireccionEntrega() != null ? p.getDireccionEntrega() : "");
             map.put("direccionEnvio", p.getDireccionEntrega() != null ? p.getDireccionEntrega() : "");
             map.put("direccionEntrega", p.getDireccionEntrega() != null ? p.getDireccionEntrega() : "");
