@@ -22,6 +22,8 @@ public class CuponServiceImpl implements CuponService {
     public Cupon guardar(Cupon cupon) {
         if (cupon.getTipoAplicacion() == null || cupon.getTipoAplicacion().trim().isEmpty()) {
             cupon.setTipoAplicacion("GENERAL");
+        } else {
+            cupon.setTipoAplicacion(cupon.getTipoAplicacion().trim().toUpperCase());
         }
         if (Boolean.TRUE.equals(cupon.getActivo()) && "BIENVENIDA".equalsIgnoreCase(cupon.getTipoAplicacion())) {
             List<Cupon> activos = repository.findByTipoAplicacionIgnoreCaseAndActivoTrue("BIENVENIDA");
@@ -34,6 +36,9 @@ public class CuponServiceImpl implements CuponService {
         }
         if (cupon.getVisibleWeb() == null) {
             cupon.setVisibleWeb(true);
+        }
+        if (cupon.getActivo() == null) {
+            cupon.setActivo(true);
         }
         if (cupon.getUsosActuales() == null) {
             cupon.setUsosActuales(0);
@@ -57,15 +62,21 @@ public class CuponServiceImpl implements CuponService {
             }
         }
 
-        cupon.setCodigo(cuponDetails.getCodigo());
-        cupon.setPorcentajeDescuento(cuponDetails.getPorcentajeDescuento());
-        cupon.setActivo(cuponDetails.getActivo());
+        if (cuponDetails.getCodigo() != null) {
+            cupon.setCodigo(cuponDetails.getCodigo());
+        }
+        if (cuponDetails.getPorcentajeDescuento() != null) {
+            cupon.setPorcentajeDescuento(cuponDetails.getPorcentajeDescuento());
+        }
+        if (cuponDetails.getActivo() != null) {
+            cupon.setActivo(cuponDetails.getActivo());
+        }
         cupon.setMontoMinimo(cuponDetails.getMontoMinimo());
         cupon.setFechaInicio(cuponDetails.getFechaInicio());
         cupon.setFechaFin(cuponDetails.getFechaFin());
         cupon.setLimiteUso(cuponDetails.getLimiteUso());
-        if (cuponDetails.getTipoAplicacion() != null) {
-            cupon.setTipoAplicacion(cuponDetails.getTipoAplicacion());
+        if (cuponDetails.getTipoAplicacion() != null && !cuponDetails.getTipoAplicacion().trim().isEmpty()) {
+            cupon.setTipoAplicacion(cuponDetails.getTipoAplicacion().trim().toUpperCase());
         }
         cupon.setCategoriaAplicable(cuponDetails.getCategoriaAplicable());
         cupon.setProductoIds(cuponDetails.getProductoIds());
