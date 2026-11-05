@@ -379,49 +379,26 @@ public class ChatServiceImpl implements ChatService {
     @Override
     public com.upc.DTO.ChatDTO regenerarRespuestaIA(Long chatId, String sugerenciaActual) {
         Chat chat = chatRepository.findById(chatId).orElseThrow(() -> new RuntimeException("Chat no encontrado"));
-        String prevSugerencia = (sugerenciaActual != null && !sugerenciaActual.trim().isEmpty())
+
+        // Determinar el texto base actual sin tocar pedidos ni mensajes de cliente
+        String textoBase = (sugerenciaActual != null && !sugerenciaActual.trim().isEmpty())
                 ? sugerenciaActual.trim()
                 : (chat.getSugerenciaIa() != null ? chat.getSugerenciaIa().trim() : "");
 
-        List<Mensaje> msgs = mensajeRepository.findTop10ByChatIdOrderByFechaEnvioDesc(chatId);
-        String ultimoContenido = "";
-        for (Mensaje m : msgs) {
-            if ("CLIENTE".equalsIgnoreCase(m.getRemitente())) {
-                ultimoContenido = m.getContenido();
-                break;
-            }
-        }
+        String cliente = (chat.getNombreCliente() != null && !chat.getNombreCliente().trim().isEmpty())
+                ? chat.getNombreCliente().trim()
+                : "cliente";
 
-        String ultimoContenidoLower = ultimoContenido != null ? ultimoContenido.toLowerCase() : "";
-        boolean esCarrito = ultimoContenidoLower.contains("confirmar mi pedido") || 
-                (ultimoContenidoLower.contains("subtotal:") && ultimoContenidoLower.contains("total:"));
-        boolean tienePedidoValido = chat.getPedidoReferenciadoId() != null && pedidoRepository.existsById(chat.getPedidoReferenciadoId());
+        // Invocar reescritura aislada en OpenAiService
+        String nuevaSugerencia = openAiService.refrasearSugerencia(textoBase, cliente);
 
-        if (esCarrito && !tienePedidoValido) {
-            System.out.println("[ChatService] regenerarRespuestaIA detectó carrito sin Pedido en BD. Creando pedido y sincronizando de forma síncrona...");
-            openAiService.procesarMensajeConIASincrono(chatId, chat.getTelefonoCliente(), ultimoContenido, false, prevSugerencia);
-        } else {
-            openAiService.generarSoloSugerenciaIA(chatId, chat.getTelefonoCliente(), ultimoContenido, prevSugerencia);
-        }
+        // Actualizar únicamente sugerenciaIa y guardar de inmediato
+        chat.setSugerenciaIa(nuevaSugerencia);
+        Chat chatGuardado = chatRepository.saveAndFlush(chat);
 
-        Chat chatActualizado = chatRepository.findById(chatId).orElse(chat);
-        if (prevSugerencia != null && !prevSugerencia.isEmpty() && prevSugerencia.equalsIgnoreCase(chatActualizado.getSugerenciaIa())) {
-            String vars = "tus productos seleccionados";
-            if (chatActualizado.getPedidoReferenciadoId() != null) {
-                Pedido p = pedidoRepository.findById(chatActualizado.getPedidoReferenciadoId()).orElse(null);
-                if (p != null && p.getVariantesEspecificas() != null && !p.getVariantesEspecificas().trim().isEmpty()) {
-                    vars = p.getVariantesEspecificas().trim();
-                }
-            }
-            String alternativa;
-            if ("CONCILIACION".equalsIgnoreCase(chatActualizado.getFasePedido()) || prevSugerencia.contains("comprobante") || prevSugerencia.contains("pago")) {
-                alternativa = openAiService.obtenerAlternativaVoucher(prevSugerencia, null);
-            } else {
-                alternativa = openAiService.obtenerAlternativaMensajeInicial(vars, prevSugerencia);
-            }
-            chatActualizado.setSugerenciaIa(alternativa);
-            chatRepository.save(chatActualizado);
-        }
-        return convertChatToDto(chatActualizado);
+        com.upc.DTO.ChatDTO dto = convertChatToDto(chatGuardado);
+        dto.setSugerenciaIa(nuevaSugerencia);
+        dto.setMensajeGenerado(nuevaSugerencia);
+        return dto;
     }
 }

@@ -2734,4 +2734,133 @@ public class OpenAiService {
         res.nuevoContextoInmediato = "STOCK_INSUFICIENTE";
         return res;
     }
+
+    /**
+     * Refrasea una sugerencia existente de forma aislada (sin crear pedidos ni tocar BD).
+     * Caso de Prueba CP027 (HU0014).
+     */
+    public String refrasearSugerencia(String sugerenciaPrevia, String nombreCliente) {
+        String base = (sugerenciaPrevia != null) ? sugerenciaPrevia.trim() : "";
+        String cliente = (nombreCliente != null && !nombreCliente.trim().isEmpty() && !"Cliente".equalsIgnoreCase(nombreCliente.trim()))
+                ? nombreCliente.trim()
+                : "cliente";
+
+        if (base.isEmpty()) {
+            return "¡Hola " + cliente + "! ¿En qué podemos ayudarte hoy con tu compra?";
+        }
+
+        // Intento con OpenAI si la API Key está configurada
+        boolean apiKeyValida = apiKey != null && !apiKey.trim().isEmpty() && !apiKey.contains("dummy");
+        if (apiKeyValida && apiUrl != null && !apiUrl.trim().isEmpty()) {
+            try {
+                HttpHeaders headers = new HttpHeaders();
+                headers.setContentType(MediaType.APPLICATION_JSON);
+                headers.set("Authorization", "Bearer " + apiKey.trim());
+
+                ObjectMapper mapper = new ObjectMapper();
+                ObjectNode rootNode = mapper.createObjectNode();
+                rootNode.put("model", "gpt-4o-mini");
+                rootNode.put("temperature", 0.7);
+                rootNode.put("max_tokens", 250);
+
+                ArrayNode messages = rootNode.putArray("messages");
+
+                ObjectNode systemNode = mapper.createObjectNode();
+                systemNode.put("role", "system");
+                systemNode.put("content", "Eres un asistente de atención al cliente para una tienda online. " +
+                        "Tu tarea es reescribir y parafrasear mensajes de respuesta respetando al 100% las condiciones comerciales.");
+                messages.add(systemNode);
+
+                ObjectNode userNode = mapper.createObjectNode();
+                userNode.put("role", "user");
+                userNode.put("content", "Reescribe el siguiente mensaje de atención al cliente para " + cliente +
+                        " con una redacción alternativa más formal, ejecutiva y concisa. " +
+                        "REGLA OBLIGATORIA: Conserva exactamente los mismos productos, precios/montos (ej. S/...) " +
+                        "y requisitos de entrega o pago que aparecen en el texto original, sin agregar ni quitar datos comerciales. " +
+                        "El texto resultante debe ser notablemente distinto en su estructura y saludo al texto original:\n[" + base + "]");
+                messages.add(userNode);
+
+                HttpEntity<String> entity = new HttpEntity<>(rootNode.toString(), headers);
+
+                long t0 = System.currentTimeMillis();
+                String respJson = restTemplate.postForObject(apiUrl, entity, String.class);
+                long elapsed = System.currentTimeMillis() - t0;
+
+                if (respJson != null && elapsed <= 2500) {
+                    JsonNode respNode = mapper.readTree(respJson);
+                    String aiText = respNode.path("choices").path(0).path("message").path("content").asText("");
+                    if (aiText != null && !aiText.trim().isEmpty() && !aiText.trim().equalsIgnoreCase(base)) {
+                        log.info("[OpenAI Service] Refraseo con LLM exitoso en {}ms", elapsed);
+                        return aiText.trim();
+                    }
+                }
+            } catch (Exception ex) {
+                log.warn("[OpenAI Service] Refraseo por LLM omitido o fallido ({}). Usando transformador local.", ex.getMessage());
+            }
+        }
+
+        // Transformación determinista inteligente de respaldo
+        return rotarEstiloSugerenciaLocal(base, cliente);
+    }
+
+    /**
+     * Transformador determinista que rota entre 4 estilos distintos conservando
+     * el cuerpo, productos, precios y plantilla de datos de la sugerencia previa.
+     */
+    public String rotarEstiloSugerenciaLocal(String sugerenciaPrevia, String nombreCliente) {
+        if (sugerenciaPrevia == null || sugerenciaPrevia.trim().isEmpty()) {
+            return "¡Hola " + nombreCliente + "! Estamos atentos para coordinar tu pedido.";
+        }
+        String texto = sugerenciaPrevia.trim();
+
+        // 1. Separar encabezado del cuerpo (si tiene plantilla o lista de datos)
+        String cuerpo = texto;
+        int idxPlantilla = -1;
+        String[] marcadores = { "Para continuar", "Para coordinar", "Para proceder", "compártenos tus datos", "proporciona los siguientes datos", "datos de entrega:", "datos de envío:" };
+        for (String m : marcadores) {
+            int pos = texto.toLowerCase().indexOf(m.toLowerCase());
+            if (pos != -1) {
+                idxPlantilla = pos;
+                break;
+            }
+        }
+
+        if (idxPlantilla != -1) {
+            cuerpo = texto.substring(idxPlantilla);
+        } else {
+            // Si hay salto de línea doble, separar saludo de contenido
+            int posSalto = texto.indexOf("\n\n");
+            if (posSalto != -1) {
+                cuerpo = texto.substring(posSalto + 2);
+            }
+        }
+
+        // Extraer mención de productos si existiera en el texto original
+        String mencionProductos = "tus productos seleccionados";
+        java.util.regex.Matcher mProd = java.util.regex.Pattern.compile("(?:para|de|pedido de)\\s+([^😊📦✨\n]+?)(?:\\s*😊|\\s*✨|\\s*📦|\\s*\\.|\\s*\\n|\\s*\\()", java.util.regex.Pattern.CASE_INSENSITIVE).matcher(texto);
+        if (mProd.find()) {
+            String match = mProd.group(1).trim();
+            if (match.length() > 3 && !match.toLowerCase().contains("continuar")) {
+                mencionProductos = match;
+            }
+        }
+
+        // 4 estilos distintos
+        List<String> estilos = new ArrayList<>();
+        // Estilo 1: Ejecutivo y directo
+        estilos.add("Estimado/a " + nombreCliente + ", confirmamos la disponibilidad para " + mencionProductos + ". " + cuerpo);
+        // Estilo 2: Cordial y estructurado
+        estilos.add("Un gusto saludarte, " + nombreCliente + ". Te detallamos la atención para " + mencionProductos + ". " + cuerpo);
+        // Estilo 3: Dinámico y amigable
+        estilos.add("¡Hola " + nombreCliente + "! Excelente elección. Contamos con stock listo para " + mencionProductos + " ✨. " + cuerpo);
+        // Estilo 4: Formal comercial
+        estilos.add("Apreciable " + nombreCliente + ", tu solicitud para " + mencionProductos + " se encuentra lista para procesar. " + cuerpo);
+
+        for (String estilo : estilos) {
+            if (!estilo.trim().equalsIgnoreCase(texto)) {
+                return estilo.trim();
+            }
+        }
+        return estilos.get(0).trim();
+    }
 }
