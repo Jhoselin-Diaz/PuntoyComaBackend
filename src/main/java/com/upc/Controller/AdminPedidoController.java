@@ -298,6 +298,10 @@ public class AdminPedidoController {
             String est;
             if ("VALIDADO".equalsIgnoreCase(estRaw)) {
                 est = "Validado";
+            } else if ("EN_CAMINO".equalsIgnoreCase(estRaw) || "EN CAMINO".equalsIgnoreCase(estRaw)) {
+                est = "En camino";
+            } else if ("ENTREGADO".equalsIgnoreCase(estRaw)) {
+                est = "Entregado";
             } else if ("RECHAZADO".equalsIgnoreCase(estRaw)) {
                 est = "Rechazado";
             } else if ("EN REVISION".equalsIgnoreCase(estRaw) || "EN_REVISION".equalsIgnoreCase(estRaw) || "EN REVISIÓN".equalsIgnoreCase(estRaw)) {
@@ -336,6 +340,12 @@ public class AdminPedidoController {
             map.put("metodoPago", p.getMetodoPago() != null ? p.getMetodoPago() : "Yape");
             map.put("referenciaPago", p.getReferenciaPago() != null ? p.getReferenciaPago() : "WSP-" + p.getId());
             map.put("voucherUrl", p.getVoucherUrl() != null ? p.getVoucherUrl() : "");
+            map.put("agencia", p.getAgenciaEnvio() != null ? p.getAgenciaEnvio() : "");
+            map.put("agenciaEnvio", p.getAgenciaEnvio() != null ? p.getAgenciaEnvio() : "");
+            map.put("numeroGuia", p.getNumeroGuia() != null ? p.getNumeroGuia() : "");
+            map.put("guia", p.getNumeroGuia() != null ? p.getNumeroGuia() : "");
+            map.put("fechaDespacho", p.getFechaDespacho() != null ? p.getFechaDespacho().toString() : "");
+            map.put("fechaExpiracionRastreo", p.getFechaExpiracionRastreo() != null ? p.getFechaExpiracionRastreo().toString() : "");
             
             // Productos detalle array
             List<Map<String, Object>> prodDetalles = new ArrayList<>();
@@ -440,6 +450,8 @@ public class AdminPedidoController {
                 String est = (String) body.get("estado");
                 String nuevoEst = null;
                 if ("Validado".equalsIgnoreCase(est) || "VALIDADO".equalsIgnoreCase(est)) nuevoEst = "VALIDADO";
+                else if ("En camino".equalsIgnoreCase(est) || "EN_CAMINO".equalsIgnoreCase(est) || "EN CAMINO".equalsIgnoreCase(est)) nuevoEst = "EN_CAMINO";
+                else if ("Entregado".equalsIgnoreCase(est) || "ENTREGADO".equalsIgnoreCase(est)) nuevoEst = "ENTREGADO";
                 else if ("Rechazado".equalsIgnoreCase(est) || "RECHAZADO".equalsIgnoreCase(est)) nuevoEst = "RECHAZADO";
                 else if ("Pendiente".equalsIgnoreCase(est) || "PENDIENTE".equalsIgnoreCase(est) || "1er Pendiente".equalsIgnoreCase(est) || "2do Pendiente".equalsIgnoreCase(est)) nuevoEst = "PENDIENTE";
                 else if ("En revision".equalsIgnoreCase(est) || "En revisión".equalsIgnoreCase(est) || "EN_REVISION".equalsIgnoreCase(est) || "EN REVISION".equalsIgnoreCase(est)) nuevoEst = "EN REVISION";
@@ -495,6 +507,26 @@ public class AdminPedidoController {
             }
             if (body.containsKey("direccionEntrega")) {
                 pedido.setDireccionEntrega((String) body.get("direccionEntrega"));
+            }
+            if (body.containsKey("agencia") || body.containsKey("agenciaEnvio")) {
+                String ag = (String) (body.containsKey("agencia") ? body.get("agencia") : body.get("agenciaEnvio"));
+                pedido.setAgenciaEnvio(ag);
+            }
+            if (body.containsKey("numeroGuia") || body.containsKey("guia")) {
+                String ng = (String) (body.containsKey("numeroGuia") ? body.get("numeroGuia") : body.get("guia"));
+                pedido.setNumeroGuia(ng);
+            }
+            if (body.containsKey("fechaDespacho")) {
+                try {
+                    pedido.setFechaDespacho(java.time.LocalDateTime.parse(body.get("fechaDespacho").toString()));
+                } catch (Exception ignored) {
+                    pedido.setFechaDespacho(java.time.LocalDateTime.now(java.time.ZoneId.of("America/Lima")));
+                }
+            }
+            if (body.containsKey("fechaExpiracionRastreo")) {
+                try {
+                    pedido.setFechaExpiracionRastreo(java.time.LocalDateTime.parse(body.get("fechaExpiracionRastreo").toString()));
+                } catch (Exception ignored) {}
             }
             
             // Recalcular diferencia

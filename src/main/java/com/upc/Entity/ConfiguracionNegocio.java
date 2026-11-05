@@ -76,4 +76,11 @@ public class ConfiguracionNegocio {
 
     @Column(name = "ofertas_banner_img")
     private String ofertasBannerImg;
+
+    // Configuración dinámica de Rastreo y Envíos
+    @Column(name = "url_rastreo_shalom")
+    private String urlRastreoShalom;
+
+    @Column(name = "url_rastreo_olva")
+    private String urlRastreoOlva;
 }

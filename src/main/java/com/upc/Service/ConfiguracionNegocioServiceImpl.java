@@ -40,6 +40,8 @@ public class ConfiguracionNegocioServiceImpl implements ConfiguracionNegocioServ
             def.setOfertasBannerTitulo("Ofertas Especiales");
             def.setOfertasBannerSubtitulo("Aprovecha estas promociones exclusivas...");
             def.setOfertasBannerImg("https://images.unsplash.com/photo-1577918349257-2e1d7fbebf96");
+            def.setUrlRastreoShalom("https://rastreo.shalom.pe/");
+            def.setUrlRastreoOlva("https://tracking.olvacourier.com/");
             
             return repository.save(def);
         });
@@ -60,6 +62,8 @@ public class ConfiguracionNegocioServiceImpl implements ConfiguracionNegocioServ
         if (configuracion.getOfertasBannerTitulo() != null) actual.setOfertasBannerTitulo(configuracion.getOfertasBannerTitulo());
         if (configuracion.getOfertasBannerSubtitulo() != null) actual.setOfertasBannerSubtitulo(configuracion.getOfertasBannerSubtitulo());
         if (configuracion.getOfertasBannerImg() != null) actual.setOfertasBannerImg(configuracion.getOfertasBannerImg());
+        if (configuracion.getUrlRastreoShalom() != null) actual.setUrlRastreoShalom(configuracion.getUrlRastreoShalom());
+        if (configuracion.getUrlRastreoOlva() != null) actual.setUrlRastreoOlva(configuracion.getUrlRastreoOlva());
         return repository.save(actual);
     }
 

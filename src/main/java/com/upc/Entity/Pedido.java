@@ -74,6 +74,19 @@ public class Pedido {
     @Column(name = "variantes_especificas")
     private String variantesEspecificas;
 
+    // Campos de rastreo y envío
+    @Column(name = "agencia_envio")
+    private String agenciaEnvio; // "SHALOM", "OLVA", "MOTORIZADO"
+
+    @Column(name = "numero_guia")
+    private String numeroGuia;
+
+    @Column(name = "fecha_despacho")
+    private LocalDateTime fechaDespacho;
+
+    @Column(name = "fecha_expiracion_rastreo")
+    private LocalDateTime fechaExpiracionRastreo;
+
     public void setDireccionEnvio(String direccionEnvio) {
         this.direccionEntrega = direccionEnvio;
     }
