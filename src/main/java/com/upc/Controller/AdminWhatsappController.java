@@ -32,4 +32,16 @@ public class AdminWhatsappController {
         WhatsappStatusDTO statusDTO = whatsappService.obtenerEstadoWhatsapp();
         return ResponseEntity.ok(statusDTO);
     }
+
+    /**
+     * Cierra la sesión activa de WhatsApp Web en el puente Node.js.
+     */
+    @org.springframework.web.bind.annotation.PostMapping("/desconectar")
+    public ResponseEntity<java.util.Map<String, Object>> desconectarWhatsapp() {
+        boolean exito = whatsappService.desconectarWhatsapp();
+        java.util.Map<String, Object> resp = new java.util.HashMap<>();
+        resp.put("success", exito);
+        resp.put("message", exito ? "Sesión de WhatsApp desconectada exitosamente" : "No se pudo desconectar WhatsApp");
+        return ResponseEntity.ok(resp);
+    }
 }

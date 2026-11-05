@@ -34,5 +34,12 @@ public interface WhatsappService {
      * @return WhatsappStatusDTO con el estado ("CONNECTED", "QR_READY", "CONNECTING", "DISCONNECTED") y el QR en Base64.
      */
     WhatsappStatusDTO obtenerEstadoWhatsapp();
+
+    /**
+     * Solicita la desconexión / reset de la sesión activa de WhatsApp Web en el puente Node.js.
+     *
+     * @return true si la solicitud fue exitosa, false en caso contrario.
+     */
+    boolean desconectarWhatsapp();
 }
 

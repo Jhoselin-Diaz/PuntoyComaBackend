@@ -299,6 +299,24 @@ public class WhatsappServiceImpl implements WhatsappService {
         return new WhatsappStatusDTO("DISCONNECTED", null);
     }
 
+    @Override
+    public boolean desconectarWhatsapp() {
+        if (evolutionApiUrl == null || evolutionApiUrl.trim().isEmpty()) {
+            log.warn("[WhatsApp] URL de puente Node.js no configurada para desconexión.");
+            return false;
+        }
+
+        String resetUrl = evolutionApiUrl + "/reset";
+        try {
+            log.info("[WhatsApp] Solicitando desconexión/reset de WhatsApp en: {}", resetUrl);
+            ResponseEntity<String> response = restTemplate.getForEntity(resetUrl, String.class);
+            return response.getStatusCode().is2xxSuccessful();
+        } catch (Exception ex) {
+            log.warn("[WhatsApp] Error al solicitar desconexión al puente Node.js: {}", ex.getMessage());
+            return false;
+        }
+    }
+
     // =========================================================================
     // Lógica privada de procesamiento de mensajes entrantes
     // =========================================================================
