@@ -24,10 +24,19 @@ public class DataInitializer {
             HomeBannerRepository bannerRepo,
             ContactoBloqueRepository contactoBloqueRepo,
             ContactoCierreRepository contactoCierreRepo,
-            PasswordEncoder encoder) {
+            PasswordEncoder encoder,
+            org.springframework.jdbc.core.JdbcTemplate jdbcTemplate) {
 
         return args -> {
             log.info("🚀 [DataInitializer] Verificando datos iniciales del sistema...");
+
+            try {
+                jdbcTemplate.execute("ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS codigo_recojo VARCHAR(50)");
+                jdbcTemplate.execute("ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS flete_destino NUMERIC(10,2)");
+                log.info("📦 [DataInitializer] Columnas codigo_recojo y flete_destino verificadas/creadas en BD.");
+            } catch (Exception ex) {
+                log.warn("⚠️ [DataInitializer] Verificación de columnas de rastreo: " + ex.getMessage());
+            }
 
             // 1. Admins por defecto para login en Netlify (/api/v1/auth/admin/login)
             seedAdminIfNotExists(adminRepo, "Administrador", "admin@puntoycoma.com", encoder.encode("admin123"));

@@ -81,6 +81,12 @@ public class Pedido {
     @Column(name = "numero_guia")
     private String numeroGuia;
 
+    @Column(name = "codigo_recojo")
+    private String codigoRecojo;
+
+    @Column(name = "flete_destino")
+    private Double fleteDestino;
+
     @Column(name = "fecha_despacho")
     private LocalDateTime fechaDespacho;
 

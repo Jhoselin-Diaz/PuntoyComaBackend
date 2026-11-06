@@ -433,6 +433,8 @@ public class AdminPedidoController {
             map.put("agenciaEnvio", p.getAgenciaEnvio() != null ? p.getAgenciaEnvio() : "");
             map.put("numeroGuia", p.getNumeroGuia() != null ? p.getNumeroGuia() : "");
             map.put("guia", p.getNumeroGuia() != null ? p.getNumeroGuia() : "");
+            map.put("codigoRecojo", p.getCodigoRecojo() != null ? p.getCodigoRecojo() : "");
+            map.put("fleteDestino", p.getFleteDestino() != null ? p.getFleteDestino() : 0.0);
             map.put("fechaDespacho", p.getFechaDespacho() != null ? p.getFechaDespacho().toString() : "");
             map.put("fechaExpiracionRastreo", p.getFechaExpiracionRastreo() != null ? p.getFechaExpiracionRastreo().toString() : "");
             
@@ -606,6 +608,23 @@ public class AdminPedidoController {
                 Object ngObj = body.containsKey("numeroGuia") ? body.get("numeroGuia") : body.get("guia");
                 pedido.setNumeroGuia(ngObj != null ? ngObj.toString() : null);
             }
+            if (body.containsKey("codigoRecojo") || body.containsKey("codigo_recojo")) {
+                Object crObj = body.containsKey("codigoRecojo") ? body.get("codigoRecojo") : body.get("codigo_recojo");
+                pedido.setCodigoRecojo(crObj != null && !crObj.toString().trim().isEmpty() ? crObj.toString().trim() : null);
+            }
+            if (body.containsKey("fleteDestino") || body.containsKey("flete_destino")) {
+                Object fdObj = body.containsKey("fleteDestino") ? body.get("fleteDestino") : body.get("flete_destino");
+                if (fdObj == null || fdObj.toString().trim().isEmpty()) {
+                    pedido.setFleteDestino(null);
+                } else {
+                    try {
+                        String s = fdObj.toString().replaceAll("[^\\d.]", "");
+                        pedido.setFleteDestino(s.isEmpty() ? null : Double.parseDouble(s));
+                    } catch (Exception ignored) {
+                        pedido.setFleteDestino(null);
+                    }
+                }
+            }
             if (body.containsKey("fechaDespacho")) {
                 Object fdObj = body.get("fechaDespacho");
                 if (fdObj == null || fdObj.toString().trim().isEmpty()) {
@@ -695,6 +714,8 @@ public class AdminPedidoController {
             resp.put("estado", guardado.getEstado());
             resp.put("agenciaEnvio", guardado.getAgenciaEnvio() != null ? guardado.getAgenciaEnvio() : "");
             resp.put("numeroGuia", guardado.getNumeroGuia() != null ? guardado.getNumeroGuia() : "");
+            resp.put("codigoRecojo", guardado.getCodigoRecojo() != null ? guardado.getCodigoRecojo() : "");
+            resp.put("fleteDestino", guardado.getFleteDestino() != null ? guardado.getFleteDestino() : 0.0);
             resp.put("fechaDespacho", guardado.getFechaDespacho() != null ? guardado.getFechaDespacho().toString() : "");
             resp.put("fechaExpiracionRastreo", guardado.getFechaExpiracionRastreo() != null ? guardado.getFechaExpiracionRastreo().toString() : "");
             return new ResponseEntity<>(resp, HttpStatus.OK);
