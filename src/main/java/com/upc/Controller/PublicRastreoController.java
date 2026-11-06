@@ -1,10 +1,13 @@
 package com.upc.Controller;
 
+import com.upc.Entity.Pedido;
+import com.upc.Repository.PedidoRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -14,7 +17,7 @@ import java.util.stream.Collectors;
 public class PublicRastreoController {
 
     @Autowired
-    private AdminPedidoController adminPedidoController;
+    private PedidoRepository pedidoRepository;
 
     @GetMapping("/{telefono}")
     @org.springframework.transaction.annotation.Transactional(readOnly = true)
@@ -24,50 +27,103 @@ public class PublicRastreoController {
                 return ResponseEntity.ok(Collections.emptyList());
             }
 
-            ResponseEntity<List<Map<String, Object>>> todosResp = adminPedidoController.obtenerPedidosDeCliente(telefono);
-            List<Map<String, Object>> todos = todosResp != null ? todosResp.getBody() : null;
-            if (todos == null || todos.isEmpty()) {
+            String cleanTel = telefono.replaceAll("[^0-9]", "");
+            if (cleanTel.length() < 7) {
                 return ResponseEntity.ok(Collections.emptyList());
             }
 
+            String tel51 = cleanTel.startsWith("51") ? cleanTel : (cleanTel.length() == 9 ? "51" + cleanTel : cleanTel);
+            String tel9 = cleanTel.startsWith("51") && cleanTel.length() == 11 ? cleanTel.substring(2) : cleanTel;
+
             LocalDateTime ahora = LocalDateTime.now();
+            DateTimeFormatter dateFormatter = DateTimeFormatter.ofPattern("dd MMM yyyy");
+            DateTimeFormatter timeFormatter = DateTimeFormatter.ofPattern("hh:mm a");
 
-            List<Map<String, Object>> activos = todos.stream().filter(p -> {
-                String est = (String) p.get("estado");
-                String estRaw = (String) p.get("estadoRaw");
-                boolean esEnCamino = "En camino".equalsIgnoreCase(est) || "EN_CAMINO".equalsIgnoreCase(est) || "EN_CAMINO".equalsIgnoreCase(estRaw);
-                String guia = (String) p.get("numeroGuia");
-                if (guia == null || guia.trim().isEmpty()) {
-                    guia = (String) p.get("guia");
+            List<Pedido> pedidos = pedidoRepository.findAll().stream()
+                .filter(p -> {
+                    if (p == null) return false;
+                    String pTel1 = (p.getUsuario() != null && p.getUsuario().getTelefono() != null) ? p.getUsuario().getTelefono().replaceAll("[^0-9]", "") : "";
+                    String pTel2 = p.getTelefonoContacto() != null ? p.getTelefonoContacto().replaceAll("[^0-9]", "") : "";
+                    return (!cleanTel.isEmpty() && (pTel1.equals(cleanTel) || pTel2.equals(cleanTel)))
+                        || (!tel51.isEmpty() && (pTel1.equals(tel51) || pTel2.equals(tel51)))
+                        || (!tel9.isEmpty() && (pTel1.equals(tel9) || pTel2.equals(tel9)));
+                })
+                .filter(p -> {
+                    String est = (p.getEstado() != null ? p.getEstado().trim().toUpperCase() : "");
+                    boolean esEnCamino = "EN_CAMINO".equals(est) || "EN CAMINO".equals(est);
+                    String guia = p.getNumeroGuia();
+                    String agencia = p.getAgenciaEnvio();
+                    boolean tieneGuiaYAgencia = (agencia != null && !agencia.trim().isEmpty()) && (guia != null && !guia.trim().isEmpty());
+
+                    if (!esEnCamino && !tieneGuiaYAgencia) return false;
+                    if ("ENTREGADO".equals(est) || "RECHAZADO".equals(est) || "CANCELADO".equals(est)) return false;
+
+                    if (p.getFechaExpiracionRastreo() != null && p.getFechaExpiracionRastreo().isBefore(ahora)) {
+                        return false;
+                    }
+                    return true;
+                })
+                .sorted((p1, p2) -> {
+                    if (p1.getFecha() != null && p2.getFecha() != null) return p2.getFecha().compareTo(p1.getFecha());
+                    if (p1.getId() != null && p2.getId() != null) return p2.getId().compareTo(p1.getId());
+                    return 0;
+                })
+                .collect(Collectors.toList());
+
+            List<Map<String, Object>> respuesta = new ArrayList<>();
+            for (Pedido p : pedidos) {
+                Map<String, Object> item = new HashMap<>();
+                String idOrden = p.getNumeroOrden() != null ? p.getNumeroOrden() : "#ORD-00" + p.getId();
+                item.put("id", idOrden);
+                item.put("numeroOrden", idOrden);
+                item.put("dbId", p.getId());
+                item.put("estado", "En camino");
+                item.put("estadoRaw", p.getEstado());
+                item.put("agenciaEnvio", p.getAgenciaEnvio() != null ? p.getAgenciaEnvio() : "SHALOM");
+                item.put("agencia", p.getAgenciaEnvio() != null ? p.getAgenciaEnvio() : "SHALOM");
+                item.put("numeroGuia", p.getNumeroGuia() != null ? p.getNumeroGuia() : "");
+                item.put("guia", p.getNumeroGuia() != null ? p.getNumeroGuia() : "");
+                item.put("numeroSeguimiento", p.getNumeroGuia() != null ? p.getNumeroGuia() : "");
+                item.put("fechaDespacho", p.getFechaDespacho() != null ? p.getFechaDespacho().toString() : "");
+                item.put("fechaExpiracionRastreo", p.getFechaExpiracionRastreo() != null ? p.getFechaExpiracionRastreo().toString() : "");
+                item.put("total", "S/ " + String.format(Locale.US, "%.2f", p.getTotal() != null ? p.getTotal() : 0.0));
+
+                String clienteNom = "Cliente";
+                if (p.getNombreCompleto() != null && !p.getNombreCompleto().trim().isEmpty()) {
+                    clienteNom = p.getNombreCompleto();
+                } else if (p.getUsuario() != null && p.getUsuario().getNombre() != null) {
+                    clienteNom = p.getUsuario().getNombre();
                 }
-                String agencia = (String) p.get("agenciaEnvio");
-                if (agencia == null || agencia.trim().isEmpty()) {
-                    agencia = (String) p.get("agencia");
+                item.put("cliente", clienteNom);
+                item.put("nombreCompleto", clienteNom);
+
+                String telContacto = "";
+                if (p.getTelefonoContacto() != null && !p.getTelefonoContacto().trim().isEmpty()) {
+                    telContacto = p.getTelefonoContacto();
+                } else if (p.getUsuario() != null && p.getUsuario().getTelefono() != null) {
+                    telContacto = p.getUsuario().getTelefono();
                 }
-                boolean tieneGuiaYAgencia = (agencia != null && !agencia.trim().isEmpty()) && (guia != null && !guia.trim().isEmpty());
+                item.put("telefono", telContacto);
 
-                if (!esEnCamino && !tieneGuiaYAgencia) return false;
-                if ("Entregado".equalsIgnoreCase(est) || "ENTREGADO".equalsIgnoreCase(est) || "ENTREGADO".equalsIgnoreCase(estRaw)) return false;
-                if ("Rechazado".equalsIgnoreCase(est) || "RECHAZADO".equalsIgnoreCase(est) || "Cancelado".equalsIgnoreCase(est)) return false;
+                item.put("direccion", p.getDireccionEntrega() != null ? p.getDireccionEntrega() : "");
+                item.put("direccionEnvio", p.getDireccionEntrega() != null ? p.getDireccionEntrega() : "");
 
-                // Verificar expiración si existe
-                Object expObj = p.get("fechaExpiracionRastreo");
-                if (expObj != null) {
-                    try {
-                        String expStr = expObj.toString().trim();
-                        if (!expStr.isEmpty()) {
-                            LocalDateTime expDate = LocalDateTime.parse(expStr);
-                            if (expDate.isBefore(ahora)) {
-                                return false;
-                            }
-                        }
-                    } catch (Exception ignored) {}
+                if (p.getFecha() != null) {
+                    item.put("fecha", p.getFecha().format(dateFormatter));
+                    item.put("hora", p.getFecha().format(timeFormatter).toUpperCase());
+                } else {
+                    item.put("fecha", "Reciente");
+                    item.put("hora", "");
                 }
 
-                return true;
-            }).collect(Collectors.toList());
+                String prod = p.getVariantesEspecificas() != null ? p.getVariantesEspecificas() : "Productos seleccionados";
+                item.put("producto", prod);
+                item.put("productos", prod);
 
-            return ResponseEntity.ok(activos);
+                respuesta.add(item);
+            }
+
+            return ResponseEntity.ok(respuesta);
         } catch (Exception e) {
             System.err.println("[PublicRastreoController] Error en consultarRastreoPublico: " + e.getMessage());
             e.printStackTrace();
