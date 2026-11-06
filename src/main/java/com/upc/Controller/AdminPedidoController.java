@@ -81,6 +81,7 @@ public class AdminPedidoController {
         }
     }
 
+    @CrossOrigin(origins = "*", allowedHeaders = "*", methods = {RequestMethod.GET, RequestMethod.OPTIONS})
     @GetMapping("/rastreo/{telefono}")
     @org.springframework.transaction.annotation.Transactional(readOnly = true)
     public ResponseEntity<List<Map<String, Object>>> consultarRastreoPublico(@PathVariable String telefono) {
@@ -598,23 +599,33 @@ public class AdminPedidoController {
                 pedido.setDireccionEntrega((String) body.get("direccionEntrega"));
             }
             if (body.containsKey("agencia") || body.containsKey("agenciaEnvio")) {
-                String ag = (String) (body.containsKey("agencia") ? body.get("agencia") : body.get("agenciaEnvio"));
-                pedido.setAgenciaEnvio(ag);
+                Object agObj = body.containsKey("agencia") ? body.get("agencia") : body.get("agenciaEnvio");
+                pedido.setAgenciaEnvio(agObj != null ? agObj.toString() : null);
             }
             if (body.containsKey("numeroGuia") || body.containsKey("guia")) {
-                String ng = (String) (body.containsKey("numeroGuia") ? body.get("numeroGuia") : body.get("guia"));
-                pedido.setNumeroGuia(ng);
+                Object ngObj = body.containsKey("numeroGuia") ? body.get("numeroGuia") : body.get("guia");
+                pedido.setNumeroGuia(ngObj != null ? ngObj.toString() : null);
             }
             if (body.containsKey("fechaDespacho")) {
-                java.time.LocalDateTime fd = parseFlexibleDateTime(body.get("fechaDespacho"));
-                pedido.setFechaDespacho(fd != null ? fd : java.time.LocalDateTime.now(java.time.ZoneId.of("America/Lima")));
+                Object fdObj = body.get("fechaDespacho");
+                if (fdObj == null || fdObj.toString().trim().isEmpty()) {
+                    pedido.setFechaDespacho(null);
+                } else {
+                    java.time.LocalDateTime fd = parseFlexibleDateTime(fdObj);
+                    pedido.setFechaDespacho(fd != null ? fd : java.time.LocalDateTime.now(java.time.ZoneId.of("America/Lima")));
+                }
             }
             if (body.containsKey("fechaExpiracionRastreo")) {
-                java.time.LocalDateTime fe = parseFlexibleDateTime(body.get("fechaExpiracionRastreo"));
-                if (fe != null) {
-                    pedido.setFechaExpiracionRastreo(fe);
+                Object feObj = body.get("fechaExpiracionRastreo");
+                if (feObj == null || feObj.toString().trim().isEmpty()) {
+                    pedido.setFechaExpiracionRastreo(null);
                 } else {
-                    pedido.setFechaExpiracionRastreo(java.time.LocalDateTime.now(java.time.ZoneId.of("America/Lima")).plusDays(5));
+                    java.time.LocalDateTime fe = parseFlexibleDateTime(feObj);
+                    if (fe != null) {
+                        pedido.setFechaExpiracionRastreo(fe);
+                    } else {
+                        pedido.setFechaExpiracionRastreo(java.time.LocalDateTime.now(java.time.ZoneId.of("America/Lima")).plusDays(5));
+                    }
                 }
             }
             
