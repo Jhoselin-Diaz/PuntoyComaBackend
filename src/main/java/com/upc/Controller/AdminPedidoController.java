@@ -59,7 +59,20 @@ public class AdminPedidoController {
     @org.springframework.transaction.annotation.Transactional(readOnly = true)
     public ResponseEntity<List<Map<String, Object>>> obtenerPedidosDeCliente(@PathVariable String telefono) {
         try {
-            List<Pedido> pedidos = pedidoRepository.findByUsuarioTelefono(telefono);
+            String cleanTel = telefono != null ? telefono.replaceAll("[^0-9]", "") : "";
+            String tel51 = cleanTel.startsWith("51") ? cleanTel : (cleanTel.length() == 9 ? "51" + cleanTel : cleanTel);
+            String tel9 = cleanTel.startsWith("51") && cleanTel.length() == 11 ? cleanTel.substring(2) : cleanTel;
+
+            List<Pedido> pedidos = pedidoRepository.findAll().stream()
+                .filter(p -> {
+                    String pTel1 = (p.getUsuario() != null && p.getUsuario().getTelefono() != null) ? p.getUsuario().getTelefono().replaceAll("[^0-9]", "") : "";
+                    String pTel2 = p.getTelefonoContacto() != null ? p.getTelefonoContacto().replaceAll("[^0-9]", "") : "";
+                    return (!cleanTel.isEmpty() && (pTel1.equals(cleanTel) || pTel2.equals(cleanTel)))
+                        || (!tel51.isEmpty() && (pTel1.equals(tel51) || pTel2.equals(tel51)))
+                        || (!tel9.isEmpty() && (pTel1.equals(tel9) || pTel2.equals(tel9)));
+                })
+                .collect(java.util.stream.Collectors.toList());
+
             return new ResponseEntity<>(mapPedidosToResponse(pedidos), HttpStatus.OK);
         } catch (Exception e) {
             System.err.println("[AdminPedidoController] Error al obtener pedidos de cliente " + telefono + ": " + e.getMessage());
@@ -139,6 +152,25 @@ public class AdminPedidoController {
             return "N_" + p.getNombreCompleto().trim().toLowerCase();
         }
         return "P_" + (p.getId() != null ? p.getId() : "0");
+    }
+
+    private java.time.LocalDateTime parseFlexibleDateTime(Object val) {
+        if (val == null) return null;
+        String str = val.toString().trim();
+        if (str.isEmpty()) return null;
+        try {
+            return java.time.LocalDateTime.parse(str);
+        } catch (Exception e1) {
+            try {
+                return java.time.Instant.parse(str).atZone(java.time.ZoneId.of("America/Lima")).toLocalDateTime();
+            } catch (Exception e2) {
+                try {
+                    return java.time.OffsetDateTime.parse(str).atZoneSameInstant(java.time.ZoneId.of("America/Lima")).toLocalDateTime();
+                } catch (Exception e3) {
+                    return null;
+                }
+            }
+        }
     }
 
     @DeleteMapping("/{id}")
@@ -444,6 +476,7 @@ public class AdminPedidoController {
     }
 
     @PutMapping("/{id}")
+    @org.springframework.transaction.annotation.Transactional
     public ResponseEntity<?> actualizarPedido(@PathVariable String id, @RequestBody Map<String, Object> body) {
         return buscarPedidoPorIdFlexible(id).map(pedido -> {
             if (body.containsKey("estado")) {
@@ -517,16 +550,16 @@ public class AdminPedidoController {
                 pedido.setNumeroGuia(ng);
             }
             if (body.containsKey("fechaDespacho")) {
-                try {
-                    pedido.setFechaDespacho(java.time.LocalDateTime.parse(body.get("fechaDespacho").toString()));
-                } catch (Exception ignored) {
-                    pedido.setFechaDespacho(java.time.LocalDateTime.now(java.time.ZoneId.of("America/Lima")));
-                }
+                java.time.LocalDateTime fd = parseFlexibleDateTime(body.get("fechaDespacho"));
+                pedido.setFechaDespacho(fd != null ? fd : java.time.LocalDateTime.now(java.time.ZoneId.of("America/Lima")));
             }
             if (body.containsKey("fechaExpiracionRastreo")) {
-                try {
-                    pedido.setFechaExpiracionRastreo(java.time.LocalDateTime.parse(body.get("fechaExpiracionRastreo").toString()));
-                } catch (Exception ignored) {}
+                java.time.LocalDateTime fe = parseFlexibleDateTime(body.get("fechaExpiracionRastreo"));
+                if (fe != null) {
+                    pedido.setFechaExpiracionRastreo(fe);
+                } else {
+                    pedido.setFechaExpiracionRastreo(java.time.LocalDateTime.now(java.time.ZoneId.of("America/Lima")).plusDays(5));
+                }
             }
             
             // Recalcular diferencia
@@ -561,6 +594,13 @@ public class AdminPedidoController {
                         chat.setDireccionDetectada(false);
                         chat.setDatosCompletos(false);
                         chat.setPedidoReferenciadoId(null);
+                    } else if ("EN_CAMINO".equalsIgnoreCase(guardado.getEstado()) || "EN CAMINO".equalsIgnoreCase(guardado.getEstado())) {
+                        String tracking = (guardado.getNumeroGuia() != null && !guardado.getNumeroGuia().trim().isEmpty() && !"DIRECTO".equalsIgnoreCase(guardado.getNumeroGuia()))
+                                ? (" Tu código de seguimiento es: " + guardado.getNumeroGuia() + " (" + (guardado.getAgenciaEnvio() != null ? guardado.getAgenciaEnvio() : "Envío") + ").")
+                                : (" Tu entrega está siendo coordinada por " + (guardado.getAgenciaEnvio() != null ? guardado.getAgenciaEnvio() : "nuestro motorizado") + ".");
+                        nuevaSugerencia = "¡Hola " + chat.getNombreCliente() + "! Tu pedido ya se encuentra en camino. 🚚" + tracking + " Puedes consultar el estado en nuestra sección de rastreo en la web. ¡Muchas gracias por tu preferencia! ❤️";
+                    } else if ("ENTREGADO".equalsIgnoreCase(guardado.getEstado())) {
+                        nuevaSugerencia = "¡Hola " + chat.getNombreCliente() + "! Tu pedido figura como entregado. Esperamos que disfrutes tus productos. ¡Fue un placer atenderte! ✨";
                     } else if ("RECHAZADO".equalsIgnoreCase(guardado.getEstado())) {
                         nuevaSugerencia = "Hola " + chat.getNombreCliente() + ", lamentablemente hemos detectado una discrepancia en tu comprobante de pago: " + (guardado.getResultadoConciliacion() != null ? guardado.getResultadoConciliacion() : "Los datos no coinciden.") + ". Por favor, envíanos el comprobante correcto o comunícate con nosotros para solucionarlo. 😊";
                         // CORRECCIÓN: Al RECHAZAR, se resetea el contexto comercial y se limpia pedidoReferenciadoId.
@@ -582,7 +622,15 @@ public class AdminPedidoController {
                 });
             }
 
-            return new ResponseEntity<>(guardado, HttpStatus.OK);
+            Map<String, Object> resp = mapPedidosToResponse(java.util.Collections.singletonList(guardado)).get(0);
+            resp.put("success", true);
+            resp.put("mensaje", "Pedido actualizado correctamente");
+            resp.put("estado", guardado.getEstado());
+            resp.put("agenciaEnvio", guardado.getAgenciaEnvio() != null ? guardado.getAgenciaEnvio() : "");
+            resp.put("numeroGuia", guardado.getNumeroGuia() != null ? guardado.getNumeroGuia() : "");
+            resp.put("fechaDespacho", guardado.getFechaDespacho() != null ? guardado.getFechaDespacho().toString() : "");
+            resp.put("fechaExpiracionRastreo", guardado.getFechaExpiracionRastreo() != null ? guardado.getFechaExpiracionRastreo().toString() : "");
+            return new ResponseEntity<>(resp, HttpStatus.OK);
         }).orElseGet(() -> new ResponseEntity<>(HttpStatus.NOT_FOUND));
     }
 
