@@ -26,6 +26,8 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/api/v1/auth/admin/**").permitAll()
                 .requestMatchers("/api/public/**").permitAll()
+                .requestMatchers("/api/pedidos/rastreo/**").permitAll()
+                .requestMatchers("/api/pedidos/cliente/**").permitAll()
                 .anyRequest().permitAll()
             );
 

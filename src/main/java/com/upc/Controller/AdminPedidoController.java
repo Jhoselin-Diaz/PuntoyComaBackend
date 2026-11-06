@@ -81,6 +81,60 @@ public class AdminPedidoController {
         }
     }
 
+    @GetMapping("/rastreo/{telefono}")
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
+    public ResponseEntity<List<Map<String, Object>>> consultarRastreoPublico(@PathVariable String telefono) {
+        try {
+            ResponseEntity<List<Map<String, Object>>> todosResp = obtenerPedidosDeCliente(telefono);
+            List<Map<String, Object>> todos = todosResp != null ? todosResp.getBody() : null;
+            if (todos == null || todos.isEmpty()) {
+                return ResponseEntity.ok(java.util.Collections.emptyList());
+            }
+
+            java.time.LocalDateTime ahora = java.time.LocalDateTime.now();
+
+            List<Map<String, Object>> activos = todos.stream().filter(p -> {
+                String est = (String) p.get("estado");
+                String estRaw = (String) p.get("estadoRaw");
+                boolean esEnCamino = "En camino".equalsIgnoreCase(est) || "EN_CAMINO".equalsIgnoreCase(est) || "EN_CAMINO".equalsIgnoreCase(estRaw);
+                String guia = (String) p.get("numeroGuia");
+                if (guia == null || guia.trim().isEmpty()) {
+                    guia = (String) p.get("guia");
+                }
+                String agencia = (String) p.get("agenciaEnvio");
+                if (agencia == null || agencia.trim().isEmpty()) {
+                    agencia = (String) p.get("agencia");
+                }
+                boolean tieneGuiaYAgencia = (agencia != null && !agencia.trim().isEmpty()) && (guia != null && !guia.trim().isEmpty());
+
+                if (!esEnCamino && !tieneGuiaYAgencia) return false;
+                if ("Entregado".equalsIgnoreCase(est) || "ENTREGADO".equalsIgnoreCase(est) || "ENTREGADO".equalsIgnoreCase(estRaw)) return false;
+                if ("Rechazado".equalsIgnoreCase(est) || "RECHAZADO".equalsIgnoreCase(est) || "Cancelado".equalsIgnoreCase(est)) return false;
+
+                Object expObj = p.get("fechaExpiracionRastreo");
+                if (expObj != null) {
+                    try {
+                        String expStr = expObj.toString().trim();
+                        if (!expStr.isEmpty()) {
+                            java.time.LocalDateTime expDate = java.time.LocalDateTime.parse(expStr);
+                            if (expDate.isBefore(ahora)) {
+                                return false;
+                            }
+                        }
+                    } catch (Exception ignored) {}
+                }
+
+                return true;
+            }).collect(java.util.stream.Collectors.toList());
+
+            return ResponseEntity.ok(activos);
+        } catch (Exception e) {
+            System.err.println("[AdminPedidoController] Error en consultarRastreoPublico: " + e.getMessage());
+            e.printStackTrace();
+            return ResponseEntity.ok(java.util.Collections.emptyList());
+        }
+    }
+
     private java.util.Optional<Pedido> buscarPedidoPorIdFlexible(String idStr) {
         if (idStr == null || idStr.trim().isEmpty()) {
             return java.util.Optional.empty();
