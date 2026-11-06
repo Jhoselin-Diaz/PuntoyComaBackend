@@ -433,7 +433,9 @@ public class AdminPedidoController {
             map.put("agenciaEnvio", p.getAgenciaEnvio() != null ? p.getAgenciaEnvio() : "");
             map.put("numeroGuia", p.getNumeroGuia() != null ? p.getNumeroGuia() : "");
             map.put("guia", p.getNumeroGuia() != null ? p.getNumeroGuia() : "");
-            map.put("codigoRecojo", p.getCodigoRecojo() != null ? p.getCodigoRecojo() : "");
+            map.put("codigoOrdenShalom", p.getCodigoOrdenShalom() != null ? p.getCodigoOrdenShalom() : "");
+            map.put("claveRecojo", p.getClaveRecojo() != null ? p.getClaveRecojo() : (p.getCodigoRecojo() != null ? p.getCodigoRecojo() : ""));
+            map.put("codigoRecojo", p.getClaveRecojo() != null ? p.getClaveRecojo() : (p.getCodigoRecojo() != null ? p.getCodigoRecojo() : ""));
             map.put("fleteDestino", p.getFleteDestino() != null ? p.getFleteDestino() : 0.0);
             map.put("fechaDespacho", p.getFechaDespacho() != null ? p.getFechaDespacho().toString() : "");
             map.put("fechaExpiracionRastreo", p.getFechaExpiracionRastreo() != null ? p.getFechaExpiracionRastreo().toString() : "");
@@ -608,9 +610,17 @@ public class AdminPedidoController {
                 Object ngObj = body.containsKey("numeroGuia") ? body.get("numeroGuia") : body.get("guia");
                 pedido.setNumeroGuia(ngObj != null ? ngObj.toString() : null);
             }
-            if (body.containsKey("codigoRecojo") || body.containsKey("codigo_recojo")) {
-                Object crObj = body.containsKey("codigoRecojo") ? body.get("codigoRecojo") : body.get("codigo_recojo");
-                pedido.setCodigoRecojo(crObj != null && !crObj.toString().trim().isEmpty() ? crObj.toString().trim() : null);
+            if (body.containsKey("codigoOrdenShalom") || body.containsKey("codigo_orden_shalom")) {
+                Object cosObj = body.containsKey("codigoOrdenShalom") ? body.get("codigoOrdenShalom") : body.get("codigo_orden_shalom");
+                pedido.setCodigoOrdenShalom(cosObj != null && !cosObj.toString().trim().isEmpty() ? cosObj.toString().trim() : null);
+            }
+            if (body.containsKey("claveRecojo") || body.containsKey("clave_recojo") || body.containsKey("codigoRecojo") || body.containsKey("codigo_recojo")) {
+                Object crObj = body.containsKey("claveRecojo") ? body.get("claveRecojo") :
+                               (body.containsKey("clave_recojo") ? body.get("clave_recojo") :
+                               (body.containsKey("codigoRecojo") ? body.get("codigoRecojo") : body.get("codigo_recojo")));
+                String crVal = (crObj != null && !crObj.toString().trim().isEmpty()) ? crObj.toString().trim() : null;
+                pedido.setClaveRecojo(crVal);
+                pedido.setCodigoRecojo(crVal);
             }
             if (body.containsKey("fleteDestino") || body.containsKey("flete_destino")) {
                 Object fdObj = body.containsKey("fleteDestino") ? body.get("fleteDestino") : body.get("flete_destino");
@@ -714,7 +724,9 @@ public class AdminPedidoController {
             resp.put("estado", guardado.getEstado());
             resp.put("agenciaEnvio", guardado.getAgenciaEnvio() != null ? guardado.getAgenciaEnvio() : "");
             resp.put("numeroGuia", guardado.getNumeroGuia() != null ? guardado.getNumeroGuia() : "");
-            resp.put("codigoRecojo", guardado.getCodigoRecojo() != null ? guardado.getCodigoRecojo() : "");
+            resp.put("codigoOrdenShalom", guardado.getCodigoOrdenShalom() != null ? guardado.getCodigoOrdenShalom() : "");
+            resp.put("claveRecojo", guardado.getClaveRecojo() != null ? guardado.getClaveRecojo() : "");
+            resp.put("codigoRecojo", guardado.getClaveRecojo() != null ? guardado.getClaveRecojo() : "");
             resp.put("fleteDestino", guardado.getFleteDestino() != null ? guardado.getFleteDestino() : 0.0);
             resp.put("fechaDespacho", guardado.getFechaDespacho() != null ? guardado.getFechaDespacho().toString() : "");
             resp.put("fechaExpiracionRastreo", guardado.getFechaExpiracionRastreo() != null ? guardado.getFechaExpiracionRastreo().toString() : "");

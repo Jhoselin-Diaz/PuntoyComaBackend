@@ -31,6 +31,9 @@ public class DataInitializer {
             log.info("🚀 [DataInitializer] Verificando datos iniciales del sistema...");
 
             try {
+                jdbcTemplate.execute("ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS numero_guia VARCHAR(100)");
+                jdbcTemplate.execute("ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS codigo_orden_shalom VARCHAR(50)");
+                jdbcTemplate.execute("ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS clave_recojo VARCHAR(50)");
                 jdbcTemplate.execute("ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS codigo_recojo VARCHAR(50)");
                 jdbcTemplate.execute("ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS flete_destino NUMERIC(10,2)");
                 log.info("📦 [DataInitializer] Columnas codigo_recojo y flete_destino verificadas/creadas en BD.");

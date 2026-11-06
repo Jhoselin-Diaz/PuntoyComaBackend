@@ -81,6 +81,12 @@ public class Pedido {
     @Column(name = "numero_guia")
     private String numeroGuia;
 
+    @Column(name = "codigo_orden_shalom")
+    private String codigoOrdenShalom;
+
+    @Column(name = "clave_recojo")
+    private String claveRecojo;
+
     @Column(name = "codigo_recojo")
     private String codigoRecojo;
 
