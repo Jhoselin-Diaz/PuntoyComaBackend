@@ -691,10 +691,36 @@ public class AdminPedidoController {
                         chat.setDatosCompletos(false);
                         chat.setPedidoReferenciadoId(null);
                     } else if ("EN_CAMINO".equalsIgnoreCase(guardado.getEstado()) || "EN CAMINO".equalsIgnoreCase(guardado.getEstado())) {
-                        String tracking = (guardado.getNumeroGuia() != null && !guardado.getNumeroGuia().trim().isEmpty() && !"DIRECTO".equalsIgnoreCase(guardado.getNumeroGuia()))
-                                ? (" Tu código de seguimiento es: " + guardado.getNumeroGuia() + " (" + (guardado.getAgenciaEnvio() != null ? guardado.getAgenciaEnvio() : "Envío") + ").")
-                                : (" Tu entrega está siendo coordinada por " + (guardado.getAgenciaEnvio() != null ? guardado.getAgenciaEnvio() : "nuestro motorizado") + ".");
-                        nuevaSugerencia = "¡Hola " + chat.getNombreCliente() + "! Tu pedido ya se encuentra en camino. 🚚" + tracking + " Puedes consultar el estado en nuestra sección de rastreo en la web. ¡Muchas gracias por tu preferencia! ❤️";
+                        String agencia = guardado.getAgenciaEnvio() != null ? guardado.getAgenciaEnvio().toUpperCase().trim() : "ENVÍO";
+                        String nombre = (chat.getNombreCliente() != null && !chat.getNombreCliente().trim().isEmpty() && !"Cliente".equalsIgnoreCase(chat.getNombreCliente().trim()))
+                                ? chat.getNombreCliente().trim() : "cliente";
+
+                        if (agencia.contains("SHALOM")) {
+                            StringBuilder sb = new StringBuilder();
+                            sb.append("¡Hola ").append(nombre).append("! Tu pedido ya se encuentra en camino con Shalom Empresarial 🚚📦.\n");
+                            if (guardado.getNumeroGuia() != null && !guardado.getNumeroGuia().trim().isEmpty()) {
+                                sb.append("• N° de Orden: ").append(guardado.getNumeroGuia().trim()).append("\n");
+                            }
+                            if (guardado.getCodigoOrdenShalom() != null && !guardado.getCodigoOrdenShalom().trim().isEmpty()) {
+                                sb.append("• Código de Orden: ").append(guardado.getCodigoOrdenShalom().trim()).append("\n");
+                            }
+                            if (guardado.getClaveRecojo() != null && !guardado.getClaveRecojo().trim().isEmpty()) {
+                                sb.append("• Clave de Recojo: ").append(guardado.getClaveRecojo().trim()).append(" (para retirar en agencia con DNI físico)\n");
+                            }
+                            if (guardado.getFleteDestino() != null && guardado.getFleteDestino() > 0) {
+                                sb.append("• Flete a pagar en destino: S/.").append(String.format(java.util.Locale.US, "%.2f", guardado.getFleteDestino())).append("\n");
+                            }
+                            sb.append("Puedes realizar el seguimiento en la web de Shalom o en nuestra sección de rastreo (/rastreo). ¡Muchas gracias por tu preferencia! ❤️");
+                            nuevaSugerencia = sb.toString();
+                        } else if (agencia.contains("OLVA")) {
+                            String guia = (guardado.getNumeroGuia() != null && !guardado.getNumeroGuia().trim().isEmpty())
+                                    ? guardado.getNumeroGuia().trim() : "Por asignar";
+                            nuevaSugerencia = "¡Hola " + nombre + "! Tu pedido ya se encuentra en camino con Olva Courier 🚚📦.\n" +
+                                    "• N° de Guía / Tracking: " + guia + "\n" +
+                                    "Puedes realizar el seguimiento desde la web de Olva o en nuestra sección de rastreo (/rastreo). ¡Muchas gracias por tu preferencia! ❤️";
+                        } else {
+                            nuevaSugerencia = "¡Hola " + nombre + "! Tu pedido ya se encuentra en camino. 🛵 Tu entrega está siendo coordinada directamente por nuestro motorizado local. En breve se comunicarán contigo para la entrega. ¡Muchas gracias por tu preferencia! ❤️";
+                        }
                     } else if ("ENTREGADO".equalsIgnoreCase(guardado.getEstado())) {
                         nuevaSugerencia = "¡Hola " + chat.getNombreCliente() + "! Tu pedido figura como entregado. Esperamos que disfrutes tus productos. ¡Fue un placer atenderte! ✨";
                     } else if ("RECHAZADO".equalsIgnoreCase(guardado.getEstado())) {

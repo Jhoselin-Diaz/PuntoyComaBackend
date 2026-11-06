@@ -595,8 +595,16 @@ public class OpenAiService {
                                            .append(", Fecha: ").append(p.getFecha())
                                            .append(", Estado: ").append(p.getEstado())
                                            .append(", Total: S/.").append(p.getTotal() != null ? p.getTotal() : 0.0)
-                                           .append(", Productos: ").append(p.getVariantesEspecificas() != null ? p.getVariantesEspecificas() : "N/A")
-                                           .append("\n");
+                                           .append(", Productos: ").append(p.getVariantesEspecificas() != null ? p.getVariantesEspecificas() : "N/A");
+                            if ("EN_CAMINO".equalsIgnoreCase(p.getEstado()) || "EN CAMINO".equalsIgnoreCase(p.getEstado())) {
+                                contextoPedidos.append(" [DESPACHADO - Agencia: ").append(p.getAgenciaEnvio() != null ? p.getAgenciaEnvio() : "N/A")
+                                               .append(", N° Guía/Orden: ").append(p.getNumeroGuia() != null ? p.getNumeroGuia() : "N/A")
+                                               .append(", Cód Orden: ").append(p.getCodigoOrdenShalom() != null ? p.getCodigoOrdenShalom() : "N/A")
+                                               .append(", Clave Recojo: ").append(p.getClaveRecojo() != null ? p.getClaveRecojo() : "N/A")
+                                               .append(", Flete Destino: S/.").append(p.getFleteDestino() != null ? p.getFleteDestino() : 0.0)
+                                               .append("]");
+                            }
+                            contextoPedidos.append("\n");
                         }
                     }
                 } else {
@@ -713,6 +721,7 @@ public class OpenAiService {
                         " - SI el cliente está respondiendo a una oferta de REEMPLAZO por producto agotado, PROHIBIDO asignar 'DECISION_PENDIENTE'.\n" +
                         " - SI el estado del pedido es 'PENDIENTE' y el cliente ya envió un voucher ('[VOUCHER]'), la 'respuestaSugerida' DEBE indicar que el comprobante está en proceso de validación por el equipo.\n" +
                         " - SI el estado del pedido es 'VALIDADO', redactarás una confirmación feliz de que el pago fue validado y que el pedido se está preparando para despacho.\n" +
+                        " - SI el estado del pedido más reciente es 'EN_CAMINO': Informarás con entusiasmo que su pedido ya fue despachado. Si la agencia es SHALOM, incluirás obligatoriamente el N° de Orden, Código de Orden, Clave de Recojo en agencia y el flete en destino si aplica. Si es OLVA, incluirás el N° de Guía/Tracking. Si es MOTORIZADO, indicarás que la entrega se coordina directamente con el repartidor.\n" +
                         " - SI el estado del pedido es 'RECHAZADO' por un motivo real de comprobante/OCR, redactarás un mensaje amable alertando sobre la discrepancia sin reiniciar el pedido comercial.\n\n";
 
                 systemPrompt += "Debes retornar UNICAMENTE un objeto JSON de salida:\n" +
