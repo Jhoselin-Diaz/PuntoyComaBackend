@@ -253,9 +253,11 @@ public class AdminPedidoController {
             if (p == null) continue;
             String est = p.getEstado();
             boolean esValidado = "VALIDADO".equalsIgnoreCase(est);
+            boolean esEnCamino = "EN_CAMINO".equalsIgnoreCase(est) || "EN CAMINO".equalsIgnoreCase(est);
+            boolean esEntregado = "ENTREGADO".equalsIgnoreCase(est);
             boolean esRechazado = "RECHAZADO".equalsIgnoreCase(est);
             boolean esEnRevision = "EN REVISION".equalsIgnoreCase(est) || "EN_REVISION".equalsIgnoreCase(est) || "EN REVISIÓN".equalsIgnoreCase(est);
-            if (!esValidado && !esRechazado && !esEnRevision) {
+            if (!esValidado && !esEnCamino && !esEntregado && !esRechazado && !esEnRevision) {
                 String key = getClienteKey(p);
                 pendientesPorCliente.computeIfAbsent(key, k -> new ArrayList<>()).add(p);
             }
