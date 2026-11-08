@@ -13,6 +13,9 @@ public interface ChatRepository extends JpaRepository<Chat, Long> {
     Optional<Chat> findByTelefonoCliente(String telefonoCliente);
     List<Chat> findAllByOrderByFechaUltimaActualizacionDesc();
 
+    @Query("SELECT c FROM Chat c ORDER BY c.fechaUltimaActualizacion DESC NULLS LAST, c.id DESC")
+    List<Chat> findAllChatsOrderByFechaUltimaActualizacionDesc();
+
     @Query("SELECT c FROM Chat c ORDER BY " +
            "CASE WHEN c.prioridad = 'ALTA' THEN 1 " +
            "     WHEN c.prioridad = 'INTERMEDIA' THEN 2 " +

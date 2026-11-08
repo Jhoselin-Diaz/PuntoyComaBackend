@@ -73,6 +73,12 @@ public class AdminChatController {
         return new ResponseEntity<>(HttpStatus.NO_CONTENT);
     }
 
+    @PutMapping(value = {"/{chatId}/leer", "/{chatId}/marcar-leido"})
+    public ResponseEntity<Void> marcarComoLeido(@PathVariable Long chatId) {
+        chatService.marcarComoLeido(chatId);
+        return ResponseEntity.ok().build();
+    }
+
     @PostMapping("/{chatId}/regenerar-ia")
     public ResponseEntity<com.upc.DTO.ChatDTO> regenerarRespuestaIA(
             @PathVariable Long chatId,

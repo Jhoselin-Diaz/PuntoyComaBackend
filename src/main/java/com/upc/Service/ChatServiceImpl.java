@@ -46,7 +46,7 @@ public class ChatServiceImpl implements ChatService {
     @Transactional(readOnly = true)
     public List<ChatDTO> obtenerTodosLosChats() {
         try {
-            List<Chat> chats = chatRepository.findAllChatsOrderedByPriorityAndDate();
+            List<Chat> chats = chatRepository.findAllChatsOrderByFechaUltimaActualizacionDesc();
             if (chats == null) {
                 return new java.util.ArrayList<>();
             }
@@ -322,6 +322,15 @@ public class ChatServiceImpl implements ChatService {
             mensajeRepository.deleteAll(mensajes);
         }
         chatRepository.deleteById(chatId);
+    }
+
+    @Override
+    @Transactional
+    public void marcarComoLeido(Long chatId) {
+        chatRepository.findById(chatId).ifPresent(chat -> {
+            chat.setUnreadCount(0);
+            chatRepository.save(chat);
+        });
     }
 
     private String sanitizarUltimoMensaje(String msg) {
