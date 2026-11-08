@@ -228,73 +228,105 @@ public class AdminPedidoController {
         }
     }
 
+    private void eliminarPedidoInterno(Pedido pedido) {
+        Long pedidoId = pedido.getId();
+        if (Boolean.TRUE.equals(pedido.getStockDescontado())) {
+            inventarioService.devolverStockPorPedido(pedido);
+        }
+        String telefonoCliente = null;
+        if (pedido.getUsuario() != null && pedido.getUsuario().getTelefono() != null) {
+            telefonoCliente = pedido.getUsuario().getTelefono();
+        } else if (pedido.getTelefonoContacto() != null) {
+            telefonoCliente = pedido.getTelefonoContacto();
+        }
+        if (telefonoCliente != null && !telefonoCliente.trim().isEmpty()) {
+            String cleanTel = telefonoCliente.replaceAll("[^0-9]", "");
+            String tel51 = cleanTel.startsWith("51") ? cleanTel : (cleanTel.length() == 9 ? "51" + cleanTel : cleanTel);
+            java.util.Optional<com.upc.Entity.Chat> chatOpt = chatRepository.findByTelefonoCliente(tel51);
+            if (chatOpt.isEmpty()) {
+                chatOpt = chatRepository.findByTelefonoCliente(cleanTel);
+            }
+            chatOpt.ifPresent(chat -> {
+                chat.setContextoInmediato(null);
+                chat.setFasePedido("INICIAL");
+                chat.setPedidoReferenciadoId(null);
+                chat.setPedidoIdentificado(false);
+                chat.setDireccionDetectada(false);
+                chat.setDatosCompletos(false);
+                chat.setSugerenciaIa(null);
+                chat.setFechaCorte(java.time.LocalDateTime.now(java.time.ZoneId.of("America/Lima")));
+                chatRepository.save(chat);
+
+                // Registro de aviso de sistema en el hilo del chat del cliente (CP051 / HU0026)
+                try {
+                    com.upc.Entity.Mensaje avisoSistema = new com.upc.Entity.Mensaje();
+                    avisoSistema.setChat(chat);
+                    avisoSistema.setContenido("[Sistema]: Pedido pendiente eliminado. Conversación restablecida al estado INICIAL.");
+                    avisoSistema.setRemitente("ADMINISTRADOR");
+                    avisoSistema.setFechaEnvio(java.time.LocalDateTime.now(java.time.ZoneId.of("America/Lima")));
+                    mensajeRepository.save(avisoSistema);
+                } catch (Exception e) {
+                    System.err.println("No se pudo registrar aviso de sistema en el chat: " + e.getMessage());
+                }
+
+                System.out.println("[AUDITORÍA RESETEADO] Chat de " + tel51 + " reseteado automáticamente a INICIAL con fechaCorte y aviso tras eliminar el pedido ID: " + pedidoId);
+            });
+        }
+
+        // 1. Desvincular movimientos de inventario asociados para evitar conflictos de clave foránea
+        List<com.upc.Entity.InventarioMovimiento> movs = inventarioMovimientoRepository.findByPedidoId(pedidoId);
+        if (movs != null && !movs.isEmpty()) {
+            for (com.upc.Entity.InventarioMovimiento m : movs) {
+                m.setPedido(null);
+            }
+            inventarioMovimientoRepository.saveAll(movs);
+        }
+
+        // 2. Eliminar comprobantes/vouchers de pago vinculados al pedido
+        pagoVoucherRepository.deleteByPedidoId(pedidoId);
+
+        // 3. Eliminar detalles de productos del pedido
+        pedidoDetalleRepository.deleteByPedidoId(pedidoId);
+
+        // 4. Eliminar el pedido
+        pedidoRepository.deleteById(pedidoId);
+    }
+
     @DeleteMapping("/{id}")
     @org.springframework.transaction.annotation.Transactional
     public ResponseEntity<Void> eliminarPedido(@PathVariable String id) {
         return buscarPedidoPorIdFlexible(id).map(pedido -> {
-            Long pedidoId = pedido.getId();
-            if (Boolean.TRUE.equals(pedido.getStockDescontado())) {
-                inventarioService.devolverStockPorPedido(pedido);
-            }
-            String telefonoCliente = null;
-            if (pedido.getUsuario() != null && pedido.getUsuario().getTelefono() != null) {
-                telefonoCliente = pedido.getUsuario().getTelefono();
-            } else if (pedido.getTelefonoContacto() != null) {
-                telefonoCliente = pedido.getTelefonoContacto();
-            }
-            if (telefonoCliente != null && !telefonoCliente.trim().isEmpty()) {
-                String cleanTel = telefonoCliente.replaceAll("[^0-9]", "");
-                String tel51 = cleanTel.startsWith("51") ? cleanTel : (cleanTel.length() == 9 ? "51" + cleanTel : cleanTel);
-                java.util.Optional<com.upc.Entity.Chat> chatOpt = chatRepository.findByTelefonoCliente(tel51);
-                if (chatOpt.isEmpty()) {
-                    chatOpt = chatRepository.findByTelefonoCliente(cleanTel);
-                }
-                chatOpt.ifPresent(chat -> {
-                    chat.setContextoInmediato(null);
-                    chat.setFasePedido("INICIAL");
-                    chat.setPedidoReferenciadoId(null);
-                    chat.setPedidoIdentificado(false);
-                    chat.setDireccionDetectada(false);
-                    chat.setDatosCompletos(false);
-                    chat.setSugerenciaIa(null);
-                    chat.setFechaCorte(java.time.LocalDateTime.now(java.time.ZoneId.of("America/Lima")));
-                    chatRepository.save(chat);
-
-                    // Registro de aviso de sistema en el hilo del chat del cliente (CP051 / HU0026)
-                    try {
-                        com.upc.Entity.Mensaje avisoSistema = new com.upc.Entity.Mensaje();
-                        avisoSistema.setChat(chat);
-                        avisoSistema.setContenido("[Sistema]: Pedido pendiente eliminado. Conversación restablecida al estado INICIAL.");
-                        avisoSistema.setRemitente("ADMINISTRADOR");
-                        avisoSistema.setFechaEnvio(java.time.LocalDateTime.now(java.time.ZoneId.of("America/Lima")));
-                        mensajeRepository.save(avisoSistema);
-                    } catch (Exception e) {
-                        System.err.println("No se pudo registrar aviso de sistema en el chat: " + e.getMessage());
-                    }
-
-                    System.out.println("[AUDITORÍA RESETEADO] Chat de " + tel51 + " reseteado automáticamente a INICIAL con fechaCorte y aviso tras eliminar el pedido ID: " + pedidoId);
-                });
-            }
-
-            // 1. Desvincular movimientos de inventario asociados para evitar conflictos de clave foránea
-            List<com.upc.Entity.InventarioMovimiento> movs = inventarioMovimientoRepository.findByPedidoId(pedidoId);
-            if (movs != null && !movs.isEmpty()) {
-                for (com.upc.Entity.InventarioMovimiento m : movs) {
-                    m.setPedido(null);
-                }
-                inventarioMovimientoRepository.saveAll(movs);
-            }
-
-            // 2. Eliminar comprobantes/vouchers de pago vinculados al pedido
-            pagoVoucherRepository.deleteByPedidoId(pedidoId);
-
-            // 3. Eliminar detalles de productos del pedido
-            pedidoDetalleRepository.deleteByPedidoId(pedidoId);
-
-            // 4. Eliminar el pedido
-            pedidoRepository.deleteById(pedidoId);
+            eliminarPedidoInterno(pedido);
             return new ResponseEntity<Void>(HttpStatus.NO_CONTENT);
         }).orElseGet(() -> new ResponseEntity<>(HttpStatus.NOT_FOUND));
+    }
+
+    @PostMapping("/eliminar-multiple")
+    @org.springframework.transaction.annotation.Transactional
+    public ResponseEntity<Map<String, Object>> eliminarPedidosMultiples(@RequestBody List<Object> rawIds) {
+        if (rawIds == null || rawIds.isEmpty()) {
+            Map<String, Object> resp = new HashMap<>();
+            resp.put("success", true);
+            resp.put("eliminados", 0);
+            resp.put("mensaje", "No se proporcionaron pedidos para eliminar.");
+            return ResponseEntity.ok(resp);
+        }
+        int eliminados = 0;
+        for (Object item : rawIds) {
+            if (item == null) continue;
+            String idStr = item.toString().trim();
+            if (idStr.isEmpty()) continue;
+            java.util.Optional<Pedido> pOpt = buscarPedidoPorIdFlexible(idStr);
+            if (pOpt.isPresent()) {
+                eliminarPedidoInterno(pOpt.get());
+                eliminados++;
+            }
+        }
+        Map<String, Object> resp = new HashMap<>();
+        resp.put("success", true);
+        resp.put("eliminados", eliminados);
+        resp.put("mensaje", "Se eliminaron " + eliminados + " pedidos correctamente.");
+        return ResponseEntity.ok(resp);
     }
 
     private List<Map<String, Object>> mapPedidosToResponse(List<Pedido> pedidos) {
@@ -697,7 +729,7 @@ public class AdminPedidoController {
 
                         if (agencia.contains("SHALOM")) {
                             StringBuilder sb = new StringBuilder();
-                            sb.append("¡Hola ").append(nombre).append("! Tu pedido ya se encuentra en camino con Shalom Empresarial 🚚📦.\n");
+                            sb.append("¡Hola ").append(nombre).append("! Tu pedido ya fue despachado por Shalom Empresarial 🚚📦.\n");
                             if (guardado.getNumeroGuia() != null && !guardado.getNumeroGuia().trim().isEmpty()) {
                                 sb.append("• N° de Orden: ").append(guardado.getNumeroGuia().trim()).append("\n");
                             }
@@ -705,21 +737,23 @@ public class AdminPedidoController {
                                 sb.append("• Código de Orden: ").append(guardado.getCodigoOrdenShalom().trim()).append("\n");
                             }
                             if (guardado.getClaveRecojo() != null && !guardado.getClaveRecojo().trim().isEmpty()) {
-                                sb.append("• Clave de Recojo: ").append(guardado.getClaveRecojo().trim()).append(" (para retirar en agencia con DNI físico)\n");
+                                sb.append("• Clave de Recojo: ").append(guardado.getClaveRecojo().trim()).append(" (para retiro físico en agencia con tu DNI)\n");
                             }
                             if (guardado.getFleteDestino() != null && guardado.getFleteDestino() > 0) {
                                 sb.append("• Flete a pagar en destino: S/.").append(String.format(java.util.Locale.US, "%.2f", guardado.getFleteDestino())).append("\n");
                             }
-                            sb.append("Puedes realizar el seguimiento en la web de Shalom o en nuestra sección de rastreo (/rastreo). ¡Muchas gracias por tu preferencia! ❤️");
+                            sb.append("\n🌐 Para consultar los datos de tu envío y las indicaciones de recojo:\n")
+                              .append("👉 Ingresa a https://puntoycoma-store.netlify.app/rastreo y digita tu número de celular registrado. ¡Muchas gracias por tu compra! ❤️");
                             nuevaSugerencia = sb.toString();
                         } else if (agencia.contains("OLVA")) {
                             String guia = (guardado.getNumeroGuia() != null && !guardado.getNumeroGuia().trim().isEmpty())
                                     ? guardado.getNumeroGuia().trim() : "Por asignar";
                             nuevaSugerencia = "¡Hola " + nombre + "! Tu pedido ya se encuentra en camino con Olva Courier 🚚📦.\n" +
-                                    "• N° de Guía / Tracking: " + guia + "\n" +
-                                    "Puedes realizar el seguimiento desde la web de Olva o en nuestra sección de rastreo (/rastreo). ¡Muchas gracias por tu preferencia! ❤️";
+                                    "• N° de Guía / Tracking: " + guia + "\n\n" +
+                                    "🌐 Para revisar la información de tu envío y las instrucciones para el seguimiento:\n" +
+                                    "👉 Ingresa a https://puntoycoma-store.netlify.app/rastreo y digita tu número de celular registrado. ¡Muchas gracias por tu compra! ❤️";
                         } else {
-                            nuevaSugerencia = "¡Hola " + nombre + "! Tu pedido ya se encuentra en camino. 🛵 Tu entrega está siendo coordinada directamente por nuestro motorizado local. En breve se comunicarán contigo para la entrega. ¡Muchas gracias por tu preferencia! ❤️";
+                            nuevaSugerencia = "¡Hola " + nombre + "! Tu pedido ya se encuentra en camino 🛵📦. La entrega se realizará de forma directa con nuestro motorizado local. Por favor, mantente atento(a) a su mensaje o llamada en los próximos días para la entrega de tu paquete. ¡Muchas gracias por tu preferencia! ❤️";
                         }
                     } else if ("ENTREGADO".equalsIgnoreCase(guardado.getEstado())) {
                         nuevaSugerencia = "¡Hola " + chat.getNombreCliente() + "! Tu pedido figura como entregado. Esperamos que disfrutes tus productos. ¡Fue un placer atenderte! ✨";
