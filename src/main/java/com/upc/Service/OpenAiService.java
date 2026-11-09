@@ -69,14 +69,15 @@ public class OpenAiService {
     private org.springframework.transaction.support.TransactionTemplate transactionTemplate;
 
     public static final String PLANTILLA_DATOS_ENTREGA =
-            "📍 Nombre completo:\n" +
-            "📍 DNI:\n" +
-            "📍 Teléfono:\n" +
-            "📍 Departamento:\n" +
-            "📍 Provincia:\n" +
-            "📍 Distrito:\n" +
-            "📍 Dirección exacta:\n" +
-            "📍 Referencias:";
+            "📌 Nombre completo:\n" +
+            "📌 DNI:\n" +
+            "📌 Teléfono:\n" +
+            "📌 Departamento, Provincia y Distrito:\n" +
+            "📌 Dirección exacta y referencias:\n" +
+            "🚚 Modalidad / Agencia de envío preferida:\n" +
+            "   - SHALOM (retiro en agencia - especificar qué agencia o ciudad)\n" +
+            "   - OLVA COURIER (especificar si es a domicilio o recojo en agencia Olva)\n" +
+            "   - MOTORIZADO LOCAL (entrega directa solo para Lima Metropolitana)";
 
     public static Integer parsearNumeroOPalabra(String token) {
         if (token == null) return null;
@@ -249,6 +250,7 @@ public class OpenAiService {
         boolean esFlujoManejadoDeterminista = false;
         HttpEntity<String> entity;
         boolean esCarritoInicial;
+        boolean esClienteRegistrado;
         boolean esCompraNatural;
         boolean esSolicitudDeProductos;
         LocalDateTime ahoraLima;
@@ -304,11 +306,11 @@ public class OpenAiService {
         String texto = corpus.toString();
 
         if (d.nombreCompleto.isEmpty() || "null".equalsIgnoreCase(d.nombreCompleto) || "Cliente".equalsIgnoreCase(d.nombreCompleto)) {
-            java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?i)(?:📍\\s*)?(?:nombre(?:\\s+completo)?)\\s*[:=-]\\s*([^\\n\\r,]+)").matcher(texto);
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?i)(?:[📍👤📌]\\s*)?(?:nombre(?:\\s+completo)?|cliente)\\s*[:=-]\\s*([^\\n\\r,]+)").matcher(texto);
             if (m.find()) d.nombreCompleto = m.group(1).trim();
         }
         if (d.dni.isEmpty() || "null".equalsIgnoreCase(d.dni)) {
-            java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?i)(?:📍\\s*)?dni\\s*[:=-]\\s*([0-9]{8,9})").matcher(texto);
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?i)(?:[📍📄📌]\\s*)?dni\\s*[:=-]\\s*([0-9]{8,9})").matcher(texto);
             if (m.find()) {
                 d.dni = m.group(1).trim();
             } else {
@@ -317,24 +319,34 @@ public class OpenAiService {
             }
         }
         if (d.telefono.isEmpty() || "null".equalsIgnoreCase(d.telefono)) {
-            java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?i)(?:📍\\s*)?(?:tel[eé]fono|celular)\\s*[:=-]\\s*([0-9+\\s]{9,15})").matcher(texto);
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?i)(?:[📍📱📌]\\s*)?(?:tel[eé]fono|celular)\\s*[:=-]\\s*([0-9+\\s]{9,15})").matcher(texto);
             if (m.find()) d.telefono = m.group(1).replaceAll("[^0-9+]", "").trim();
         }
         if (d.departamento.isEmpty() || "null".equalsIgnoreCase(d.departamento)) {
-            java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?i)(?:📍\\s*)?(?:departamento|dpto)\\s*[:=-]\\s*([^\\n\\r,]+)").matcher(texto);
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?i)(?:[📍📌]\\s*)?(?:departamento|dpto)\\s*[:=-]\\s*([^\\n\\r,]+)").matcher(texto);
             if (m.find()) d.departamento = m.group(1).trim();
         }
         if (d.provincia.isEmpty() || "null".equalsIgnoreCase(d.provincia)) {
-            java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?i)(?:📍\\s*)?provincia\\s*[:=-]\\s*([^\\n\\r,]+)").matcher(texto);
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?i)(?:[📍📌]\\s*)?provincia\\s*[:=-]\\s*([^\\n\\r,]+)").matcher(texto);
             if (m.find()) d.provincia = m.group(1).trim();
         }
         if (d.distrito.isEmpty() || "null".equalsIgnoreCase(d.distrito)) {
-            java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?i)(?:📍\\s*)?distrito\\s*[:=-]\\s*([^\\n\\r,]+)").matcher(texto);
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?i)(?:[📍📌]\\s*)?distrito\\s*[:=-]\\s*([^\\n\\r,]+)").matcher(texto);
             if (m.find()) d.distrito = m.group(1).trim();
         }
         if (d.direccionExacta.isEmpty() || "null".equalsIgnoreCase(d.direccionExacta)) {
-            java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?i)(?:📍\\s*)?(?:direcci[oó]n(?:\\s+exacta)?|dir:?)\\s*[:=-]\\s*([^\\n\\r]+)").matcher(texto);
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?i)(?:[📍📌]\\s*)?(?:direcci[oó]n(?:\\s+de\\s+entrega\\s+registrada)?(?:\\s+exacta)?|dir:?)\\s*[:=-]\\s*([^\\n\\r]+)").matcher(texto);
             if (m.find()) d.direccionExacta = m.group(1).trim();
+        }
+        if (d.direccionExacta != null && d.direccionExacta.contains(",") && (d.distrito.isEmpty() || d.departamento.isEmpty())) {
+            String[] parts = d.direccionExacta.split(",");
+            if (parts.length >= 3) {
+                if (d.departamento.isEmpty()) d.departamento = parts[parts.length - 1].trim();
+                if (d.distrito.isEmpty()) d.distrito = parts[parts.length - 2].trim();
+                if (d.provincia.isEmpty()) d.provincia = d.departamento;
+            } else if (parts.length == 2) {
+                if (d.distrito.isEmpty()) d.distrito = parts[parts.length - 1].trim();
+            }
         }
         if (d.referencia == null || d.referencia.trim().isEmpty() || "null".equalsIgnoreCase(d.referencia)) {
             java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?i)(?:📍\\s*)?referencias?\\s*[:=-]\\s*([^\\n\\r]+)").matcher(texto);
@@ -362,6 +374,34 @@ public class OpenAiService {
             if (!op.trim().equalsIgnoreCase(sugerenciaActual.trim())) {
                 return op;
             }
+        }
+        return p2;
+    }
+
+        public String obtenerAlternativaClienteRegistrado(String nombre, String varsFinal, String totalStr, String direccion, String formattedCorpNum, String sugerenciaActual) {
+        String n = (nombre != null && !nombre.trim().isEmpty() && !"Cliente".equalsIgnoreCase(nombre) && !"Cliente WhatsApp".equalsIgnoreCase(nombre)) ? nombre.trim() : "";
+        String saludo = n.isEmpty() ? "¡Hola! 😊" : "¡Hola " + n + "! 😊";
+        String totalTxt = (totalStr != null && !totalStr.trim().isEmpty() && !totalStr.equals("0.00")) ? " El total a pagar es de S/." + totalStr + "." : "";
+        String dirTxt = (direccion != null && !direccion.trim().isEmpty() && !direccion.contains("null")) ? " (" + direccion.trim() + ")" : "";
+
+        String p1 = saludo + " Confirmamos disponibilidad para " + varsFinal + "." + totalTxt + "\n\n" +
+                "📍 Hemos cargado tu dirección registrada" + dirTxt + ".\n" +
+                "🚚 Por favor, indícanos por qué medio prefieres el envío:\n" +
+                "   - SHALOM (retiro en agencia)\n" +
+                "   - OLVA COURIER (a domicilio o agencia)\n" +
+                "   - MOTORIZADO LOCAL (solo Lima Metropolitana)\n\n" +
+                "💳 Puedes realizar el pago mediante Yape, Plin o Transferencia al número corporativo " + formattedCorpNum + ".\n" +
+                "📲 Por favor, envíanos el comprobante por este chat para verificarlo. ¡Muchas gracias! ❤️";
+
+        String p2 = saludo + " ¡Excelente elección! Contamos con stock disponible para " + varsFinal + "." + totalTxt + "\n\n" +
+                "📍 Tus datos de entrega ya fueron cargados con tu cuenta registrada" + dirTxt + ".\n" +
+                "🚚 ¿Por qué medio prefieres el despacho? Trabajamos con Shalom (retiro en agencia), Olva Courier (domicilio o agencia) y Motorizado local para Lima.\n\n" +
+                "💳 Para asegurar y programar tu pedido, puedes abonar por Yape o Plin al " + formattedCorpNum + " y enviarnos el comprobante por aquí. ¡Muchas gracias! ✨";
+
+        String[] opciones = new String[] { p1, p2 };
+        if (sugerenciaActual == null || sugerenciaActual.trim().isEmpty()) return p1;
+        for (String op : opciones) {
+            if (!op.trim().equalsIgnoreCase(sugerenciaActual.trim())) return op;
         }
         return p2;
     }
@@ -486,8 +526,13 @@ public class OpenAiService {
                         }
                     }
                 }
+                boolean esClienteRegistrado = false;
+                if (mensajeEntrante != null && (mensajeEntrante.contains("[PEDIDO DE CLIENTE REGISTRADO]") || mensajeEntrante.contains("PEDIDO DE CLIENTE REGISTRADO"))) {
+                    esClienteRegistrado = true;
+                }
+
                 esSolicitudDeProductos = esCarritoInicial || esCompraNatural;
-                log.info("[OpenAI Service] Detección Java — esCarritoInicial: {}, esCompraNatural: {}", esCarritoInicial, esCompraNatural);
+                log.info("[OpenAI Service] Detección Java — esCarritoInicial: {}, esCompraNatural: {}, esClienteRegistrado: {}", esCarritoInicial, esCompraNatural, esClienteRegistrado);
 
                 java.time.ZoneId zoneIdLima = java.time.ZoneId.of("America/Lima");
                 LocalDateTime ahoraLima = LocalDateTime.now(zoneIdLima);
@@ -687,6 +732,27 @@ public class OpenAiService {
                             "- Tu 'respuestaSugerida' DEBE ser DIRECTAMENTE un mensaje sumamente educado, empático y comercial redactado para el cliente, solicitándole completar el saldo pendiente de pago para poder proceder con el despacho de su pedido.\n\n";
                 }
 
+                if (esClienteRegistrado) {
+                    systemPrompt += "🚨 REGLA A (CLIENTE REGISTRADO DETECTADO - '[PEDIDO DE CLIENTE REGISTRADO]'):\n" +
+                            "El cliente ya cuenta con sesión iniciada y sus datos personales y dirección fueron enviados en la cabecera:\n" +
+                            "1. PROHIBIDO solicitar nuevamente Nombre, DNI, Teléfono ni Dirección física. Toda esa información ya está guardada en su perfil.\n" +
+                            "2. Saluda cordialmente al cliente por su nombre.\n" +
+                            "3. Confirma la disponibilidad de sus productos solicitados y el monto total exacto a pagar.\n" +
+                            "4. Menciona brevemente su dirección registrada y pregúntale por cuál de las siguientes 3 modalidades/agencias prefiere el envío:\n" +
+                            "   - SHALOM Empresarial (con recojo en agencia)\n" +
+                            "   - OLVA COURIER (a domicilio o recojo en agencia Olva)\n" +
+                            "   - MOTORIZADO LOCAL (entrega directa solo para Lima Metropolitana)\n" +
+                            "5. Proporciona inmediatamente las cuentas de pago (Yape, Plin o transferencia al número corporativo " + formattedCorpNum + ") solicitando amablemente el comprobante de pago por este chat.\n\n";
+                } else {
+                    systemPrompt += "🚨 REGLA B (CLIENTE NO REGISTRADO / SIN DATOS DE ENTREGA):\n" +
+                            "Si el cliente NO está registrado y no ha proporcionado sus datos de entrega:\n" +
+                            "1. Confirma la disponibilidad de stock de sus productos solicitados y el total a pagar.\n" +
+                            "2. Solicita amablemente la información completa incluyendo la logística de envío usando la siguiente plantilla exacta:\n" +
+                            PLANTILLA_DATOS_ENTREGA + "\n\n" +
+                            "🚨 REGLA C (RECEPCIÓN DE DATOS DEL NO REGISTRADO):\n" +
+                            "Una vez que el cliente no registrado responde con sus datos y su elección de agencia (Shalom, Olva o Motorizado), confirma la recepción conforme de los datos y solicita el comprobante de pago por Yape/Plin al número corporativo " + formattedCorpNum + ".\n\n";
+                }
+
                 systemPrompt += "FLUIDO COMERCIAL Y ETAPAS OBLIGATORIAS DE COMPRA POR WHATSAPP:\n\n" +
                         "1. FASE 'INICIAL': Se activa cuando el cliente saluda, consulta productos, indica su pedido o no ha completado los datos de entrega.\n" +
                         "   a) INTERPRETA las cantidades solicitadas de cada producto (ej. 'Taza rosa x2 y Taza roja x1').\n" +
@@ -879,6 +945,7 @@ public class OpenAiService {
                 prep.entity = apiKeyValida ? entity : null;
                 prep.sugerenciaActual = sugerenciaActual;
                 prep.esCarritoInicial = esCarritoInicial;
+                prep.esClienteRegistrado = esClienteRegistrado;
                 prep.esCompraNatural = esCompraNatural;
                 prep.esSolicitudDeProductos = esSolicitudDeProductos;
                 prep.ahoraLima = ahoraLima;
@@ -1231,8 +1298,16 @@ public class OpenAiService {
                                 respuestaSugerida = stockCheck.getMensajeSugerido();
                             } else if (ctx.esCarritoInicial) {
                                 chat.setContextoInmediato(null);
-                                respuestaSugerida = "¡Hola! Contamos con disponibilidad para " + textoProductosCarrito + " 😊. Para continuar, por favor, proporciona los siguientes datos de entrega:\n" +
-                                        PLANTILLA_DATOS_ENTREGA;
+                                if (ctx.esClienteRegistrado) {
+                                    fasePedido = "CONCILIACION";
+                                    double totalPed = (pedidoPendienteActivo != null && pedidoPendienteActivo.getTotal() != null) ? pedidoPendienteActivo.getTotal() : 0.0;
+                                    String totalPedStr = totalPed > 0 ? String.format("%.2f", totalPed) : "";
+                                    String dirFinal = (pedidoPendienteActivo != null && pedidoPendienteActivo.getDireccionEntrega() != null) ? pedidoPendienteActivo.getDireccionEntrega() : dirEx;
+                                    respuestaSugerida = obtenerAlternativaClienteRegistrado(chat.getNombreCliente(), textoProductosCarrito, totalPedStr, dirFinal, ctx.formattedCorpNum, ctx.sugerenciaActual);
+                                } else {
+                                    respuestaSugerida = "¡Hola! Contamos con disponibilidad para " + textoProductosCarrito + " 😊. Para continuar, por favor, proporciona los siguientes datos de entrega:\n" +
+                                            PLANTILLA_DATOS_ENTREGA;
+                                }
                             }
                             // NOTA: Eliminada sobreescritura forzosa de L964-969 que destruía la respuesta de OpenAI
                         }
@@ -1267,10 +1342,19 @@ public class OpenAiService {
                                 prioridad = "ALTA";
                                 respuestaSugerida = stockCheck.getMensajeSugerido();
                             } else if (ctx.esCarritoInicial) {
-                                fasePedido = "INICIAL";
-                                chat.setContextoInmediato(null);
-                                respuestaSugerida = "¡Hola! Contamos con disponibilidad para " + textoProductosCarrito + " 😊. Para continuar, por favor, proporciona los siguientes datos de entrega:\n" +
-                                        PLANTILLA_DATOS_ENTREGA;
+                                if (ctx.esClienteRegistrado) {
+                                    fasePedido = "CONCILIACION";
+                                    chat.setContextoInmediato(null);
+                                    double totalPed = (pedidoPendienteActivo != null && pedidoPendienteActivo.getTotal() != null) ? pedidoPendienteActivo.getTotal() : 0.0;
+                                    String totalPedStr = totalPed > 0 ? String.format("%.2f", totalPed) : "";
+                                    String dirFinal = (pedidoPendienteActivo != null && pedidoPendienteActivo.getDireccionEntrega() != null) ? pedidoPendienteActivo.getDireccionEntrega() : dirEx;
+                                    respuestaSugerida = obtenerAlternativaClienteRegistrado(chat.getNombreCliente(), textoProductosCarrito, totalPedStr, dirFinal, ctx.formattedCorpNum, ctx.sugerenciaActual);
+                                } else {
+                                    fasePedido = "INICIAL";
+                                    chat.setContextoInmediato(null);
+                                    respuestaSugerida = "¡Hola! Contamos con disponibilidad para " + textoProductosCarrito + " 😊. Para continuar, por favor, proporciona los siguientes datos de entrega:\n" +
+                                            PLANTILLA_DATOS_ENTREGA;
+                                }
                             } else if (tienePendienteActivo && (direccionCompletaDefinitiva || algunaDireccionDetectada || tiene5Campos || direccionValida)) {
                                 if (direccionCompletaDefinitiva || direccionValida || tiene5Campos) {
                                     String dirUnificadaSync = "Dpto: " + depto + ", Prov: " + prov + ", Dist: " + dist + ", Dir: " + dirEx + ", Ref: " + ref;
@@ -1484,6 +1568,16 @@ public class OpenAiService {
                                     }
                                     if (!telVal.isEmpty()) {
                                         pedidoExistente.setTelefonoContacto(telVal);
+                                    }
+
+                                    // Detección automática de modalidad / agencia de envío preferida
+                                    String mLow = (mensajeEntrante != null) ? mensajeEntrante.toLowerCase() : "";
+                                    if (mLow.contains("shalom")) {
+                                        pedidoExistente.setAgenciaEnvio("SHALOM");
+                                    } else if (mLow.contains("olva")) {
+                                        pedidoExistente.setAgenciaEnvio("OLVA");
+                                    } else if (mLow.contains("motorizado") || mLow.contains("delivery")) {
+                                        pedidoExistente.setAgenciaEnvio("MOTORIZADO");
                                     }
 
                                     double totalEsperado = aiResult.path("totalEsperado").asDouble(0.0);
@@ -1712,10 +1806,20 @@ public class OpenAiService {
                                         }
                                         if (ctx.esCarritoInicial) {
                                             String varsFinal = sbVariantes.length() > 0 ? sbVariantes.toString() : ctx.textoProductosCarrito;
-                                            fasePedido = "INICIAL";
-                                            chat.setContextoInmediato(null);
-                                            respuestaSugerida = "¡Hola! Contamos con disponibilidad para " + varsFinal + " 😊. Para continuar, por favor, proporciona los siguientes datos de entrega:\n" +
-                                                    PLANTILLA_DATOS_ENTREGA;
+                                            if (ctx.esClienteRegistrado) {
+                                                fasePedido = "CONCILIACION";
+                                                chat.setContextoInmediato(null);
+                                                chat.setDatosCompletos(true);
+                                                double totalPed = (pedidoGuardado != null && pedidoGuardado.getTotal() != null) ? pedidoGuardado.getTotal() : 0.0;
+                                                String totalPedStr = totalPed > 0 ? String.format("%.2f", totalPed) : "";
+                                                String dirFinal = (pedidoGuardado != null && pedidoGuardado.getDireccionEntrega() != null) ? pedidoGuardado.getDireccionEntrega() : dirEx;
+                                                respuestaSugerida = obtenerAlternativaClienteRegistrado(chat.getNombreCliente(), varsFinal, totalPedStr, dirFinal, ctx.formattedCorpNum, ctx.sugerenciaActual);
+                                            } else {
+                                                fasePedido = "INICIAL";
+                                                chat.setContextoInmediato(null);
+                                                respuestaSugerida = "¡Hola! Contamos con disponibilidad para " + varsFinal + " 😊. Para continuar, por favor, proporciona los siguientes datos de entrega:\n" +
+                                                        PLANTILLA_DATOS_ENTREGA;
+                                            }
                                         }
                                     } else if (esMensajeDeDireccion) {
                                         log.info("[OpenAI Service] Mensaje de datos de entrega detectado. Se preservan intactos los productos y total del pedido ID {}.", pedidoGuardado.getId());
@@ -1731,7 +1835,14 @@ public class OpenAiService {
                                 log.warn("[OpenAI Service] Alerta de desincronización: OpenAI sugirió mensaje de pedido pendiente por arrastre de historial. Limpiando.");
                                 if (ctx.esCarritoInicial) {
                                     String varsFinal = (pedidoPendienteActivo != null && pedidoPendienteActivo.getVariantesEspecificas() != null) ? pedidoPendienteActivo.getVariantesEspecificas() : ctx.textoProductosCarrito;
-                                    respuestaSugerida = obtenerAlternativaMensajeInicial(varsFinal, ctx.sugerenciaActual);
+                                    if (ctx.esClienteRegistrado) {
+                                        double totalRealBD = pedidoPendienteActivo != null && pedidoPendienteActivo.getTotal() != null ? pedidoPendienteActivo.getTotal() : 0.0;
+                                        String totalRealStr = String.format("%.2f", totalRealBD);
+                                        String dirFinal = (pedidoPendienteActivo != null && pedidoPendienteActivo.getDireccionEntrega() != null) ? pedidoPendienteActivo.getDireccionEntrega() : dirEx;
+                                        respuestaSugerida = obtenerAlternativaClienteRegistrado(chat.getNombreCliente(), varsFinal, totalRealStr, dirFinal, ctx.formattedCorpNum, ctx.sugerenciaActual);
+                                    } else {
+                                        respuestaSugerida = obtenerAlternativaMensajeInicial(varsFinal, ctx.sugerenciaActual);
+                                    }
                                 } else if (direccionCompletaDefinitiva && pedidoPendienteActivo != null) {
                                     double totalRealBD = pedidoPendienteActivo.getTotal() != null ? pedidoPendienteActivo.getTotal() : 0.0;
                                     String totalRealStr = String.format("%.2f", totalRealBD);
@@ -1833,6 +1944,23 @@ public class OpenAiService {
                             finalDireccionDet = false;
                             finalDatosComp = false;
                             respuestaSugerida = stockCheck.getMensajeSugerido();
+                        } else if (ctx.esClienteRegistrado) {
+                            fasePedido = "CONCILIACION";
+                            finalPedidoId = true;
+                            finalDireccionDet = true;
+                            finalDatosComp = true;
+                            chat.setContextoInmediato(null);
+                            chat.setPedidoIdentificado(true);
+                            chat.setDireccionDetectada(true);
+                            chat.setDatosCompletos(true);
+                            if (respuestaSugerida == null || respuestaSugerida.isEmpty() || respuestaSugerida.contains("proporciona los siguientes datos") || respuestaSugerida.contains("Nombre completo:")) {
+                                String varsFinal = (pedidoPendienteActivo != null && pedidoPendienteActivo.getVariantesEspecificas() != null && !pedidoPendienteActivo.getVariantesEspecificas().trim().isEmpty()) 
+                                        ? pedidoPendienteActivo.getVariantesEspecificas() : ctx.textoProductosCarrito;
+                                double totalPed = (pedidoPendienteActivo != null && pedidoPendienteActivo.getTotal() != null) ? pedidoPendienteActivo.getTotal() : 0.0;
+                                String totalPedStr = totalPed > 0 ? String.format("%.2f", totalPed) : "";
+                                String dirFinal = (pedidoPendienteActivo != null && pedidoPendienteActivo.getDireccionEntrega() != null) ? pedidoPendienteActivo.getDireccionEntrega() : dirEx;
+                                respuestaSugerida = obtenerAlternativaClienteRegistrado(chat.getNombreCliente(), varsFinal, totalPedStr, dirFinal, ctx.formattedCorpNum, ctx.sugerenciaActual);
+                            }
                         } else if (ctx.esCarritoInicial && !"DECISION_PENDIENTE".equals(intencionPedido) && !"PREGUNTANDO_DECISION_PEDIDO".equals(chat.getContextoInmediato())) {
                             if (!direccionCompletaDefinitiva && !algunaDireccionDetectada) {
                                 fasePedido = "INICIAL";
@@ -2057,6 +2185,19 @@ public class OpenAiService {
                                     chat.setDatosCompletos(false);
                                     chat.setContextoInmediato("STOCK_INSUFICIENTE");
                                     chat.setPrioridad("ALTA");
+                                } else if (ctx.esClienteRegistrado) {
+                                    double totalRealBD = pedDest.getTotal() != null ? pedDest.getTotal() : 0.0;
+                                    String totalRealStr = totalRealBD > 0 ? String.format("%.2f", totalRealBD) : "";
+                                    String dirFinal = pedDest.getDireccionEntrega() != null ? pedDest.getDireccionEntrega() : "";
+                                    String sugerenciaFallback = obtenerAlternativaClienteRegistrado(chat.getNombreCliente(), varsTexto, totalRealStr, dirFinal, ctx.formattedCorpNum, ctx.sugerenciaActual);
+                                    chat.setSugerenciaIa(sugerenciaFallback);
+                                    chat.setFasePedido("CONCILIACION");
+                                    chat.setPedidoReferenciadoId(pedDest.getId());
+                                    chat.setPedidoIdentificado(true);
+                                    chat.setDireccionDetectada(true);
+                                    chat.setDatosCompletos(true);
+                                    chat.setContextoInmediato(null);
+                                    chat.setPrioridad("NORMAL");
                                 } else {
                                     String sugerenciaFallback = obtenerAlternativaMensajeInicial(varsTexto, ctx.sugerenciaActual);
                                     chat.setSugerenciaIa(sugerenciaFallback);
