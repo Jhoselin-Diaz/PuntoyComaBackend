@@ -12,4 +12,6 @@ public interface PedidoRepository extends JpaRepository<Pedido, Long> {
     Pedido findFirstByUsuarioTelefonoAndEstado(String telefono, String estado);
     Pedido findTopByUsuarioTelefonoAndEstadoOrderByFechaDesc(String telefono, String estado);
     List<Pedido> findByEstadoAndFechaBefore(String estado, java.time.LocalDateTime limite);
+    List<Pedido> findByUsuarioIdOrderByFechaDesc(Long usuarioId);
+    List<Pedido> findByUsuarioEmailIgnoreCaseOrderByFechaDesc(String email);
 }

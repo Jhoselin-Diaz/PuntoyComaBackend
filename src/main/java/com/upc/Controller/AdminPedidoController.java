@@ -36,6 +36,9 @@ public class AdminPedidoController {
     @Autowired
     private com.upc.Service.DashboardService dashboardService;
 
+    @Autowired
+    private com.upc.Repository.UsuarioRepository usuarioRepository;
+
     @GetMapping("/mas-vendidos")
     @org.springframework.transaction.annotation.Transactional(readOnly = true)
     public ResponseEntity<List<com.upc.DTO.ProductoVigilanciaDTO>> obtenerMasVendidos() {
@@ -52,6 +55,85 @@ public class AdminPedidoController {
             System.err.println("[AdminPedidoController] Error al obtener pedidos: " + e.getMessage());
             e.printStackTrace();
             return new ResponseEntity<>(new ArrayList<>(), HttpStatus.OK);
+        }
+    }
+
+    @GetMapping({"/mis-pedidos", "/usuario/pedidos"})
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
+    public ResponseEntity<List<Map<String, Object>>> obtenerMisPedidos(
+            @RequestParam(required = false) String email,
+            @RequestParam(required = false) Long usuarioId,
+            @RequestParam(required = false) String telefono) {
+        try {
+            // AISLAMIENTO ESTRICTO: Solo retornar pedidos que pertenezcan expresamente al usuario solicitante.
+            // PROHIBIDO retornar pedidos globales o pedidos sin usuario.
+            List<Pedido> pedidos = new ArrayList<>();
+
+            if (usuarioId != null && usuarioId > 0) {
+                pedidos = pedidoRepository.findByUsuarioIdOrderByFechaDesc(usuarioId);
+            } else if (email != null && !email.trim().isEmpty()) {
+                pedidos = pedidoRepository.findByUsuarioEmailIgnoreCaseOrderByFechaDesc(email.trim());
+            } else if (telefono != null && !telefono.trim().isEmpty()) {
+                String cleanTel = telefono.replaceAll("[^0-9]", "");
+                pedidos = pedidoRepository.findByUsuarioTelefono(cleanTel);
+            }
+
+            if (pedidos == null || pedidos.isEmpty()) {
+                return ResponseEntity.ok(java.util.Collections.emptyList());
+            }
+
+            return ResponseEntity.ok(mapPedidosToResponse(pedidos));
+        } catch (Exception e) {
+            System.err.println("[AdminPedidoController] Error en obtenerMisPedidos: " + e.getMessage());
+            return ResponseEntity.ok(java.util.Collections.emptyList());
+        }
+    }
+
+    @PostMapping({"", "/"})
+    @org.springframework.transaction.annotation.Transactional
+    public ResponseEntity<Map<String, Object>> crearPedido(@RequestBody Map<String, Object> body) {
+        try {
+            Pedido pedido = new Pedido();
+            pedido.setFecha(java.time.LocalDateTime.now());
+            pedido.setEstado("PENDIENTE");
+
+            if (body.get("total") != null) {
+                pedido.setTotal(Double.parseDouble(body.get("total").toString()));
+            }
+            if (body.get("numeroOrden") != null) {
+                pedido.setNumeroOrden(body.get("numeroOrden").toString());
+            } else {
+                pedido.setNumeroOrden("WSP-" + System.currentTimeMillis());
+            }
+            if (body.get("metodoPago") != null) {
+                pedido.setMetodoPago(body.get("metodoPago").toString());
+            }
+
+            // Vincular estrictamente al Usuario si se provee email o usuarioId
+            com.upc.Entity.Usuario usuario = null;
+            if (body.get("usuarioId") != null) {
+                Long uid = Long.parseLong(body.get("usuarioId").toString());
+                usuario = usuarioRepository.findById(uid).orElse(null);
+            }
+            if (usuario == null && body.get("email") != null) {
+                String em = body.get("email").toString().trim();
+                usuario = usuarioRepository.findByEmail(em).orElse(null);
+            }
+            if (usuario != null) {
+                pedido.setUsuario(usuario);
+            }
+
+            Pedido guardado = pedidoRepository.save(pedido);
+            Map<String, Object> resp = new HashMap<>();
+            resp.put("success", true);
+            resp.put("id", guardado.getId());
+            resp.put("numeroOrden", guardado.getNumeroOrden());
+            return new ResponseEntity<>(resp, HttpStatus.CREATED);
+        } catch (Exception e) {
+            System.err.println("[AdminPedidoController] Error al crear pedido: " + e.getMessage());
+            Map<String, Object> err = new HashMap<>();
+            err.put("error", e.getMessage());
+            return new ResponseEntity<>(err, HttpStatus.INTERNAL_SERVER_ERROR);
         }
     }
 
