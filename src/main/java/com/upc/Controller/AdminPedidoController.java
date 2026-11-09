@@ -2,6 +2,7 @@ package com.upc.Controller;
 
 import com.upc.Entity.Pedido;
 import com.upc.Entity.PedidoDetalle;
+import com.upc.Entity.Usuario;
 import com.upc.Repository.PedidoRepository;
 import com.upc.Repository.PedidoDetalleRepository;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -13,6 +14,7 @@ import com.upc.Util.StockInsuficienteException;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -66,23 +68,97 @@ public class AdminPedidoController {
             @RequestParam(required = false) String telefono) {
         try {
             // AISLAMIENTO ESTRICTO: Solo retornar pedidos que pertenezcan expresamente al usuario solicitante.
-            // PROHIBIDO retornar pedidos globales o pedidos sin usuario.
-            List<Pedido> pedidos = new ArrayList<>();
+            Map<Long, Pedido> pedidosMap = new LinkedHashMap<>();
 
+            Usuario user = null;
             if (usuarioId != null && usuarioId > 0) {
-                pedidos = pedidoRepository.findByUsuarioIdOrderByFechaDesc(usuarioId);
-            } else if (email != null && !email.trim().isEmpty()) {
-                pedidos = pedidoRepository.findByUsuarioEmailIgnoreCaseOrderByFechaDesc(email.trim());
-            } else if (telefono != null && !telefono.trim().isEmpty()) {
+                user = usuarioRepository.findById(usuarioId).orElse(null);
+            }
+            if (user == null && email != null && !email.trim().isEmpty()) {
+                user = usuarioRepository.findByEmail(email.trim()).orElse(null);
+            }
+            if (user == null && telefono != null && !telefono.trim().isEmpty()) {
                 String cleanTel = telefono.replaceAll("[^0-9]", "");
-                pedidos = pedidoRepository.findByUsuarioTelefono(cleanTel);
+                if (cleanTel.length() >= 9) {
+                    String cel9 = cleanTel.substring(cleanTel.length() - 9);
+                    user = usuarioRepository.findByTelefono(cleanTel).orElse(
+                        usuarioRepository.findByTelefono("51" + cel9).orElse(
+                            usuarioRepository.findByTelefono(cel9).orElse(null)
+                        )
+                    );
+                }
             }
 
-            if (pedidos == null || pedidos.isEmpty()) {
+            if (user != null) {
+                Long uid = user.getId();
+                for (Pedido p : pedidoRepository.findByUsuarioIdOrderByFechaDesc(uid)) {
+                    if (p != null && p.getId() != null) pedidosMap.put(p.getId(), p);
+                }
+                if (user.getEmail() != null && !user.getEmail().trim().isEmpty()) {
+                    for (Pedido p : pedidoRepository.findByUsuarioEmailIgnoreCaseOrderByFechaDesc(user.getEmail().trim())) {
+                        if (p != null && p.getId() != null) pedidosMap.put(p.getId(), p);
+                    }
+                }
+                if (user.getTelefono() != null && !user.getTelefono().trim().isEmpty()) {
+                    String cleanTel = user.getTelefono().replaceAll("[^0-9]", "");
+                    for (Pedido p : pedidoRepository.findByUsuarioTelefono(cleanTel)) {
+                        if (p != null && p.getId() != null) pedidosMap.put(p.getId(), p);
+                    }
+                    if (cleanTel.length() >= 9) {
+                        String cel9 = cleanTel.substring(cleanTel.length() - 9);
+                        for (Pedido p : pedidoRepository.findByUsuarioTelefono(cel9)) {
+                            if (p != null && p.getId() != null) pedidosMap.put(p.getId(), p);
+                        }
+                        for (Pedido p : pedidoRepository.findByTelefonoContacto(cel9)) {
+                            if (p != null && p.getId() != null) pedidosMap.put(p.getId(), p);
+                        }
+                        for (Pedido p : pedidoRepository.findByTelefonoContacto("51" + cel9)) {
+                            if (p != null && p.getId() != null) pedidosMap.put(p.getId(), p);
+                        }
+                    }
+                }
+            }
+
+            // Búsqueda adicional por parámetros directos
+            if (usuarioId != null && usuarioId > 0) {
+                for (Pedido p : pedidoRepository.findByUsuarioIdOrderByFechaDesc(usuarioId)) {
+                    if (p != null && p.getId() != null) pedidosMap.put(p.getId(), p);
+                }
+            }
+            if (email != null && !email.trim().isEmpty()) {
+                for (Pedido p : pedidoRepository.findByUsuarioEmailIgnoreCaseOrderByFechaDesc(email.trim())) {
+                    if (p != null && p.getId() != null) pedidosMap.put(p.getId(), p);
+                }
+            }
+            if (telefono != null && !telefono.trim().isEmpty()) {
+                String cleanTel = telefono.replaceAll("[^0-9]", "");
+                for (Pedido p : pedidoRepository.findByUsuarioTelefono(cleanTel)) {
+                    if (p != null && p.getId() != null) pedidosMap.put(p.getId(), p);
+                }
+                if (cleanTel.length() >= 9) {
+                    String cel9 = cleanTel.substring(cleanTel.length() - 9);
+                    for (Pedido p : pedidoRepository.findByTelefonoContacto(cel9)) {
+                        if (p != null && p.getId() != null) pedidosMap.put(p.getId(), p);
+                    }
+                    for (Pedido p : pedidoRepository.findByTelefonoContacto("51" + cel9)) {
+                        if (p != null && p.getId() != null) pedidosMap.put(p.getId(), p);
+                    }
+                }
+            }
+
+            if (pedidosMap.isEmpty()) {
                 return ResponseEntity.ok(java.util.Collections.emptyList());
             }
 
-            return ResponseEntity.ok(mapPedidosToResponse(pedidos));
+            List<Pedido> listaFinal = new ArrayList<>(pedidosMap.values());
+            listaFinal.sort((a, b) -> {
+                if (a.getFecha() == null && b.getFecha() == null) return 0;
+                if (a.getFecha() == null) return 1;
+                if (b.getFecha() == null) return -1;
+                return b.getFecha().compareTo(a.getFecha());
+            });
+
+            return ResponseEntity.ok(mapPedidosToResponse(listaFinal));
         } catch (Exception e) {
             System.err.println("[AdminPedidoController] Error en obtenerMisPedidos: " + e.getMessage());
             return ResponseEntity.ok(java.util.Collections.emptyList());
@@ -449,7 +525,12 @@ public class AdminPedidoController {
             if (p == null) continue;
             Map<String, Object> map = new HashMap<>();
             map.put("id", p.getNumeroOrden() != null ? p.getNumeroOrden() : "#ORD-00" + p.getId());
+            map.put("numeroOrden", p.getNumeroOrden() != null ? p.getNumeroOrden() : "#ORD-00" + p.getId());
             map.put("dbId", p.getId());
+            map.put("email", (p.getUsuario() != null && p.getUsuario().getEmail() != null) ? p.getUsuario().getEmail() : "");
+            map.put("usuarioId", (p.getUsuario() != null) ? p.getUsuario().getId() : null);
+            map.put("fechaOriginal", p.getFecha() != null ? p.getFecha().toString() : null);
+            map.put("totalNumerico", p.getTotal() != null ? p.getTotal() : 0.0);
             String clienteNom = "Cliente WhatsApp";
             try {
                 if (p.getNombreCompleto() != null && !p.getNombreCompleto().trim().isEmpty()) {
